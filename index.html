@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Явка ГТО</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #F3F4EF;
+    --surface: #FFFFFF;
+    --surface-2: #ECEEE7;
+    --ink: #1C2420;
+    --muted: #64706A;
+    --border: #DDE1D8;
+    --accent: #2C4A63;
+    --accent-ink: #FFFFFF;
+    --present: #3E8A5C;
+    --present-bg: #E4F3E9;
+    --danger: #B3543E;
+    --radius: 12px;
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #141815;
+      --surface: #1D2320;
+      --surface-2: #242B27;
+      --ink: #E9ECE7;
+      --muted: #97A299;
+      --border: #323930;
+      --accent: #7CAECD;
+      --accent-ink: #0D1416;
+      --present: #5FC585;
+      --present-bg: #1B3324;
+      --danger: #D98770;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #141815;
+    --surface: #1D2320;
+    --surface-2: #242B27;
+    --ink: #E9ECE7;
+    --muted: #97A299;
+    --border: #323930;
+    --accent: #7CAECD;
+    --accent-ink: #0D1416;
+    --present: #5FC585;
+    --present-bg: #1B3324;
+    --danger: #D98770;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  #app { display: flex; flex-direction: column; min-height: 100%; }
+
+  header {
+    position: sticky;
+    top: var(--safe-t);
+    z-index: 10;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: calc(14px + var(--safe-t)) 16px 12px;
+  }
+  .titlebar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 19px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .2s; flex: none; }
+  .dot.ok { background: var(--present); }
+  .dot.err { background: var(--danger); }
+  .iconbtn {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    width: 34px; height: 34px;
+    border-radius: 9px;
+    display: grid; place-items: center;
+    cursor: pointer;
+    flex: none;
+  }
+  .iconbtn:active { transform: scale(0.95); }
+
+  .searchrow { display: flex; gap: 8px; margin-top: 10px; }
+  .searchrow input[type="search"] {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    font-size: 15px;
+    font-family: inherit;
+  }
+  .searchrow input::placeholder { color: var(--muted); }
+
+  .counts { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .counts b { color: var(--ink); font-family: 'IBM Plex Mono', monospace; }
+
+  main { flex: 1; padding: 10px 16px calc(24px + var(--safe-b)); max-width: 880px; width: 100%; margin: 0 auto; }
+
+  .list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+
+  .row {
+    display: grid;
+    grid-template-columns: 40px 1fr auto auto;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    transition: background .15s, border-color .15s;
+  }
+  .row.present {
+    background: var(--present-bg);
+    border-color: var(--present);
+  }
+  .row .num {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--muted);
+    text-align: center;
+  }
+  .row.present .num { color: var(--present); }
+
+  .who { min-width: 0; }
+  .who .fio {
+    font-weight: 600;
+    font-size: 14.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .who .meta {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .who .meta .stupen { color: var(--ink); font-weight: 600; }
+
+  .stickerbtn {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .stickerbtn:active { transform: scale(0.96); }
+  .stickerbtn:disabled { opacity: .4; cursor: default; }
+
+  .toggle {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 44px;
+    height: 26px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    position: relative;
+    cursor: pointer;
+    flex: none;
+    transition: background .15s;
+  }
+  .toggle::after {
+    content: "";
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: transform .15s, background .15s;
+  }
+  .toggle:checked { background: var(--present-bg); border-color: var(--present); }
+  .toggle:checked::after { transform: translateX(18px); background: var(--present); }
+
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 40px 16px;
+    font-size: 14px;
+  }
+
+  /* ---- Модалка настроек ---- */
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+    z-index: 50;
+  }
+  .overlay[hidden] { display: none; }
+  .modal {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 22px;
+    max-width: 420px;
+    width: 100%;
+    border: 1px solid var(--border);
+  }
+  .modal h2 { margin: 0 0 6px; font-size: 17px; }
+  .modal p { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+  .modal input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .modal .btnrow { display: flex; gap: 8px; justify-content: flex-end; }
+  .btn {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 9px 16px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .modal .err { color: var(--danger); font-size: 12.5px; margin: -6px 0 12px; display: none; }
+
+  /* ---- Печать стикера ---- */
+  #printArea { display: none; }
+  @media print {
+    @page { size: 58mm 40mm; margin: 0; }
+    body * { visibility: hidden; }
+    #printArea, #printArea * { visibility: visible; }
+    #printArea {
+      display: flex !important;
+      position: fixed;
+      top: 0; left: 0;
+      width: 58mm; height: 40mm;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    #printArea .p-num {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 700;
+      font-size: 17mm;
+      line-height: 1;
+      color: #000;
+    }
+    #printArea .p-rule {
+      width: 40mm;
+      height: 0.6mm;
+      background: #000;
+      margin: 2.5mm 0;
+    }
+    #printArea .p-stupen {
+      font-family: 'IBM Plex Mono', monospace;
+      font-weight: 700;
+      font-size: 13mm;
+      line-height: 1;
+      color: #000;
+    }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="titlebar">
+      <h1>Явка ГТО</h1>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div class="status"><span class="dot" id="dot"></span><span id="statusText">не подключено</span></div>
+        <button class="iconbtn" id="settingsBtn" title="Настройки" aria-label="Настройки">⚙</button>
+      </div>
+    </div>
+    <div class="searchrow">
+      <input type="search" id="search" placeholder="Поиск по ФИО или номеру…" autocomplete="off">
+    </div>
+    <div class="counts">
+      <span>Всего: <b id="cTotal">0</b></span>
+      <span>Пришли: <b id="cPresent">0</b></span>
+      <span>Осталось: <b id="cRest">0</b></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="list" id="list"></div>
+    <div class="empty" id="emptyMsg" hidden>Список пуст или ещё не загружен.</div>
+  </main>
+</div>
+
+<div id="printArea">
+  <div class="p-num" id="pNum"></div>
+  <div class="p-rule"></div>
+  <div class="p-stupen" id="pStupen"></div>
+</div>
+
+<div class="overlay" id="settingsOverlay" hidden>
+  <div class="modal">
+    <h2>Подключение к таблице</h2>
+    <p>Вставь URL веб-приложения Apps Script (заканчивается на <code>/exec</code>), развёрнутого в таблице «протокол главный».</p>
+    <input type="text" id="urlInput" placeholder="https://script.google.com/macros/s/.../exec">
+    <div class="err" id="urlErr">Не удалось подключиться по этому адресу.</div>
+    <div class="btnrow">
+      <button class="btn" id="closeSettings">Отмена</button>
+      <button class="btn primary" id="saveSettings">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var LS_KEY = 'gto_apps_script_url';
+  var data = [];
+  var scriptUrl = localStorage.getItem(LS_KEY) || '';
+
+  var listEl = document.getElementById('list');
+  var emptyMsg = document.getElementById('emptyMsg');
+  var searchEl = document.getElementById('search');
+  var dotEl = document.getElementById('dot');
+  var statusText = document.getElementById('statusText');
+  var cTotal = document.getElementById('cTotal');
+  var cPresent = document.getElementById('cPresent');
+  var cRest = document.getElementById('cRest');
+
+  var overlay = document.getElementById('settingsOverlay');
+  var urlInput = document.getElementById('urlInput');
+  var urlErr = document.getElementById('urlErr');
+
+  document.getElementById('settingsBtn').addEventListener('click', function () {
+    urlInput.value = scriptUrl;
+    urlErr.style.display = 'none';
+    overlay.hidden = false;
+  });
+  document.getElementById('closeSettings').addEventListener('click', function () {
+    overlay.hidden = true;
+  });
+  document.getElementById('saveSettings').addEventListener('click', function () {
+    var v = urlInput.value.trim();
+    if (!v) return;
+    scriptUrl = v;
+    localStorage.setItem(LS_KEY, v);
+    overlay.hidden = true;
+    loadData();
+  });
+
+  function setStatus(state, text) {
+    dotEl.className = 'dot' + (state ? ' ' + state : '');
+    statusText.textContent = text;
+  }
+
+  function stupenRoman(stupenFull) {
+    if (!stupenFull) return '';
+    var m = String(stupenFull).match(/^[IVXLCDM]+/);
+    return m ? m[0] : String(stupenFull).split(' ')[0];
+  }
+
+  function render() {
+    var q = searchEl.value.trim().toLowerCase();
+    var filtered = data.filter(function (item) {
+      if (!q) return true;
+      return (
+        String(item.num).toLowerCase().indexOf(q) !== -1 ||
+        String(item.fio).toLowerCase().indexOf(q) !== -1 ||
+        String(item.uin).toLowerCase().indexOf(q) !== -1
+      );
+    });
+
+    listEl.innerHTML = '';
+    emptyMsg.hidden = filtered.length > 0;
+
+    filtered.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'row' + (item.present ? ' present' : '');
+
+      var num = document.createElement('div');
+      num.className = 'num mono';
+      num.textContent = item.num;
+
+      var who = document.createElement('div');
+      who.className = 'who';
+      var fio = document.createElement('div');
+      fio.className = 'fio';
+      fio.textContent = item.fio;
+      var meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.innerHTML = '<span class="stupen">' + stupenRoman(item.stupen) + '</span><span>' + (item.pol === 'женский' ? 'жен.' : item.pol === 'мужской' ? 'муж.' : (item.pol || '')) + '</span><span class="mono">' + (item.uin || '') + '</span>';
+      who.appendChild(fio);
+      who.appendChild(meta);
+
+      var stickerBtn = document.createElement('button');
+      stickerBtn.className = 'stickerbtn';
+      stickerBtn.textContent = 'Стикер';
+      stickerBtn.addEventListener('click', function () {
+        printSticker(item);
+      });
+
+      var toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.className = 'toggle';
+      toggle.checked = !!item.present;
+      toggle.setAttribute('aria-label', 'Пришёл: ' + item.fio);
+      toggle.addEventListener('change', function () {
+        setPresent(item, toggle.checked, row);
+      });
+
+      row.appendChild(num);
+      row.appendChild(who);
+      row.appendChild(stickerBtn);
+      row.appendChild(toggle);
+      listEl.appendChild(row);
+    });
+
+    cTotal.textContent = data.length;
+    var presentCount = data.filter(function (d) { return d.present; }).length;
+    cPresent.textContent = presentCount;
+    cRest.textContent = data.length - presentCount;
+  }
+
+  function printSticker(item) {
+    document.getElementById('pNum').textContent = item.num;
+    document.getElementById('pStupen').textContent = stupenRoman(item.stupen);
+    window.print();
+  }
+
+  function setPresent(item, value, rowEl) {
+    var prev = item.present;
+    item.present = value;
+    rowEl.classList.toggle('present', value);
+    cPresent.textContent = data.filter(function (d) { return d.present; }).length;
+    cRest.textContent = data.length - data.filter(function (d) { return d.present; }).length;
+
+    if (!scriptUrl) return;
+    fetch(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ row: item.row, present: value })
+    }).then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(res.error || 'Ошибка сохранения');
+      })
+      .catch(function () {
+        item.present = prev;
+        rowEl.classList.toggle('present', prev);
+        var toggleEl = rowEl.querySelector('.toggle');
+        if (toggleEl) toggleEl.checked = prev;
+        setStatus('err', 'ошибка сохранения');
+      });
+  }
+
+  function loadData() {
+    if (!scriptUrl) {
+      setStatus('', 'не подключено');
+      overlay.hidden = false;
+      return;
+    }
+    setStatus('', 'загрузка…');
+    fetch(scriptUrl)
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (!res.ok) throw new Error('bad response');
+        data = res.data || [];
+        setStatus('ok', 'подключено · ' + data.length);
+        render();
+      })
+      .catch(function () {
+        setStatus('err', 'нет связи с таблицей');
+        urlErr.style.display = 'block';
+      });
+  }
+
+  searchEl.addEventListener('input', render);
+
+  loadData();
+})();
+</script>
+</body>
+</html>
