@@ -6,7 +6,7 @@
 <title>Явка ГТО</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light;
@@ -71,7 +71,7 @@
 
   header {
     position: sticky;
-    top: var(--safe-t);
+    top: 0;
     z-index: 10;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
@@ -265,7 +265,7 @@
       justify-content: center;
     }
     #printArea .p-num {
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: 'IBM Plex Mono', 'DejaVu Sans Mono', Menlo, Consolas, 'Courier New', monospace;
       font-weight: 700;
       font-size: 17mm;
       line-height: 1;
@@ -278,7 +278,7 @@
       margin: 2.5mm 0;
     }
     #printArea .p-stupen {
-      font-family: 'IBM Plex Mono', monospace;
+      font-family: 'IBM Plex Mono', 'DejaVu Sans Mono', Menlo, Consolas, 'Courier New', monospace;
       font-weight: 700;
       font-size: 13mm;
       line-height: 1;
@@ -335,7 +335,10 @@
 <script>
 (function () {
   var LS_KEY = 'gto_apps_script_url';
+  var REFRESH_MS = 15000;
   var data = [];
+  var pendingSaves = 0; // сколько отметок ещё сохраняется
+  var writeGen = 0;     // растёт при каждой записи — чтобы отбрасывать устаревшие ответы GET
   var scriptUrl = localStorage.getItem(LS_KEY) || '';
 
   var listEl = document.getElementById('list');
@@ -379,6 +382,20 @@
     return m ? m[0] : String(stupenFull).split(' ')[0];
   }
 
+  function span(cls, text) {
+    var el = document.createElement('span');
+    if (cls) el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
+  function updateCounts() {
+    var presentCount = data.filter(function (d) { return d.present; }).length;
+    cTotal.textContent = data.length;
+    cPresent.textContent = presentCount;
+    cRest.textContent = data.length - presentCount;
+  }
+
   function render() {
     var q = searchEl.value.trim().toLowerCase();
     var filtered = data.filter(function (item) {
@@ -408,7 +425,9 @@
       fio.textContent = item.fio;
       var meta = document.createElement('div');
       meta.className = 'meta';
-      meta.innerHTML = '<span class="stupen">' + stupenRoman(item.stupen) + '</span><span>' + (item.pol === 'женский' ? 'жен.' : item.pol === 'мужской' ? 'муж.' : (item.pol || '')) + '</span><span class="mono">' + (item.uin || '') + '</span>';
+      meta.appendChild(span('stupen', stupenRoman(item.stupen)));
+      meta.appendChild(span('', item.pol === 'женский' ? 'жен.' : item.pol === 'мужской' ? 'муж.' : (item.pol || '')));
+      meta.appendChild(span('mono', item.uin || ''));
       who.appendChild(fio);
       who.appendChild(meta);
 
@@ -435,10 +454,7 @@
       listEl.appendChild(row);
     });
 
-    cTotal.textContent = data.length;
-    var presentCount = data.filter(function (d) { return d.present; }).length;
-    cPresent.textContent = presentCount;
-    cRest.textContent = data.length - presentCount;
+    updateCounts();
   }
 
   function printSticker(item) {
@@ -451,10 +467,11 @@
     var prev = item.present;
     item.present = value;
     rowEl.classList.toggle('present', value);
-    cPresent.textContent = data.filter(function (d) { return d.present; }).length;
-    cRest.textContent = data.length - data.filter(function (d) { return d.present; }).length;
+    updateCounts();
 
     if (!scriptUrl) return;
+    pendingSaves++;
+    writeGen++;
     fetch(scriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -462,38 +479,70 @@
     }).then(function (r) { return r.json(); })
       .then(function (res) {
         if (!res.ok) throw new Error(res.error || 'Ошибка сохранения');
+        setStatus('ok', 'подключено · ' + data.length);
       })
       .catch(function () {
         item.present = prev;
         rowEl.classList.toggle('present', prev);
         var toggleEl = rowEl.querySelector('.toggle');
         if (toggleEl) toggleEl.checked = prev;
+        updateCounts();
         setStatus('err', 'ошибка сохранения');
+      })
+      .then(function () {
+        pendingSaves--;
+        writeGen++;
       });
   }
 
-  function loadData() {
+  // background: true — тихое автообновление (без модалки при ошибке)
+  function loadData(background) {
     if (!scriptUrl) {
       setStatus('', 'не подключено');
       overlay.hidden = false;
       return;
     }
-    setStatus('', 'загрузка…');
-    fetch(scriptUrl)
+    // Не перетираем локальные отметки, пока они сохраняются
+    if (background && pendingSaves > 0) return;
+    var gen = writeGen;
+    var url = scriptUrl;
+    if (!background) setStatus('', 'загрузка…');
+    fetch(url)
       .then(function (r) { return r.json(); })
       .then(function (res) {
         if (!res.ok) throw new Error('bad response');
-        data = res.data || [];
+        // Ответ устарел: за время запроса была отметка или сменился адрес
+        if (gen !== writeGen || pendingSaves > 0 || url !== scriptUrl) return;
+        var fresh = res.data || [];
+        var changed = JSON.stringify(fresh) !== JSON.stringify(data);
+        data = fresh;
         setStatus('ok', 'подключено · ' + data.length);
-        render();
+        if (changed || !background) render();
       })
       .catch(function () {
+        if (url !== scriptUrl) return;
         setStatus('err', 'нет связи с таблицей');
-        urlErr.style.display = 'block';
+        if (!background) {
+          urlInput.value = scriptUrl;
+          urlErr.style.display = 'block';
+          overlay.hidden = false;
+        }
       });
   }
 
   searchEl.addEventListener('input', render);
+
+  setInterval(function () {
+    if (!document.hidden && overlay.hidden) loadData(true);
+  }, REFRESH_MS);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && overlay.hidden && scriptUrl) loadData(true);
+  });
+
+  // Подгружаем шрифт стикера заранее, чтобы печать не ушла с запасным шрифтом
+  if (document.fonts && document.fonts.load) {
+    document.fonts.load('700 16px "IBM Plex Mono"').catch(function () {});
+  }
 
   loadData();
 })();
