@@ -532,6 +532,36 @@
 
   searchEl.addEventListener('input', render);
 
+  // Любая буква/цифра с клавиатуры идёт в поиск, где бы ни был фокус.
+  // Delete — очистить поиск целиком.
+  document.addEventListener('keydown', function (e) {
+    if (!overlay.hidden || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    var inSearch = document.activeElement === searchEl;
+
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      searchEl.value = '';
+      searchEl.focus();
+      render();
+      return;
+    }
+    if (inSearch) return;
+
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      searchEl.value = searchEl.value.slice(0, -1);
+    } else if (e.key.length === 1) {
+      e.preventDefault();
+      searchEl.value += e.key;
+    } else {
+      return;
+    }
+    searchEl.focus();
+    var end = searchEl.value.length;
+    searchEl.setSelectionRange(end, end);
+    render();
+  });
+
   setInterval(function () {
     if (!document.hidden && overlay.hidden) loadData(true);
   }, REFRESH_MS);
