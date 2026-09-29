@@ -238,7 +238,22 @@
   .pct { font-size: 12px; font-weight: 600; color: var(--present); min-width: 38px; text-align: right; }
 
   /* ---- Поиск ---- */
-  .searchrow { position: relative; margin-top: 12px; }
+  .searchline { display: flex; gap: 8px; margin-top: 12px; }
+  .searchrow { position: relative; flex: 1; min-width: 0; }
+  .addbtn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 16px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: var(--accent-ink);
+    font-size: 14px; font-weight: 600;
+    cursor: pointer; flex: none;
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent);
+    transition: filter .15s, transform .15s;
+  }
+  .addbtn:hover { filter: brightness(1.06); }
+  .addbtn:active { transform: scale(.97); }
   .searchrow svg {
     position: absolute; left: 13px; top: 50%; transform: translateY(-50%);
     color: var(--muted); pointer-events: none; transition: color .15s;
@@ -435,6 +450,8 @@
     .status .stxt { display: none; }
     .status { padding: 8px; }
     .stat b { font-size: 19px; }
+    .addbtn { padding: 0 13px; }
+    .addbtn span { display: none; }
   }
 
   /* ---- Модалка настроек ---- */
@@ -495,6 +512,45 @@
   .btn.primary:hover { filter: brightness(1.05); }
   .modal .err { color: var(--danger); background: var(--danger-soft); border-radius: 9px; padding: 8px 10px; font-size: 12.5px; margin: -4px 0 12px; display: none; }
 
+  /* ---- Форма добавления ---- */
+  .addform { max-width: 480px; }
+  .fld { display: block; margin-bottom: 12px; }
+  .fld > span { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+  .modal .fld input, .modal .fld select {
+    width: 100%;
+    margin: 0;
+    padding: 11px 12px;
+    border-radius: 11px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--ink);
+    font-family: inherit;
+    font-size: 15px;
+  }
+  .modal .fld input.mono { font-family: 'IBM Plex Mono', monospace; }
+  .modal .fld select { cursor: pointer; }
+  .modal .fld input:focus, .modal .fld select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  .modal .fld.bad input, .modal .fld.bad select { border-color: var(--danger); box-shadow: 0 0 0 4px var(--danger-soft); }
+  .fldrow { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; }
+  @media (max-width: 440px) { .fldrow { grid-template-columns: 1fr; gap: 0; } }
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg button {
+    padding: 10px 12px; border-radius: 11px;
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--ink); font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .seg button[aria-checked="true"].m { background: var(--male-soft); border-color: var(--male); color: var(--male); }
+  .seg button[aria-checked="true"].f { background: var(--female-soft); border-color: var(--female); color: var(--female); }
+  .seg button[aria-checked="true"]:not(.m):not(.f) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .fld.bad .seg button { border-color: var(--danger); }
+  .btn:disabled { opacity: .6; cursor: default; }
+  .row.added { animation: added 2.4s ease-out; }
+  @keyframes added {
+    0%, 30% { box-shadow: 0 0 0 3px var(--accent), var(--shadow); }
+    100% { box-shadow: 0 0 0 0 transparent, var(--shadow-sm); }
+  }
+
   /* ---- Уведомление ---- */
   .toast {
     position: fixed; left: 50%; bottom: calc(20px + var(--safe-b));
@@ -509,6 +565,7 @@
     z-index: 60;
   }
   .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  .toast.good { background: var(--present); color: var(--on-present); }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -584,10 +641,16 @@
         <div class="bar" role="progressbar" aria-label="Явка" aria-valuemin="0" aria-valuemax="100" id="barWrap"><i id="bar"></i></div>
         <span class="pct mono" id="pct">0%</span>
       </div>
-      <div class="searchrow">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input type="search" id="search" placeholder="ФИО, номер или УИН…" autocomplete="off">
-        <span class="kbd" title="Delete — очистить поиск">Del</span>
+      <div class="searchline">
+        <div class="searchrow">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="search" id="search" placeholder="ФИО, номер или УИН…" autocomplete="off">
+          <span class="kbd" title="Delete — очистить поиск">Del</span>
+        </div>
+        <button type="button" class="addbtn" id="addBtn" title="Добавить участника" aria-label="Добавить участника">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Добавить</span>
+        </button>
       </div>
     </div>
   </header>
@@ -607,6 +670,40 @@
   <div class="p-num" id="pNum"></div>
   <div class="p-rule"></div>
   <div class="p-stupen" id="pStupen"></div>
+</div>
+
+<div class="overlay" id="addOverlay" hidden>
+  <form class="modal addform" id="addForm" novalidate autocomplete="off">
+    <h2>Новый участник</h2>
+    <p>Строка добавится в конец листа «Список» с номером <b class="mono" id="addNextNum">—</b>.</p>
+
+    <label class="fld">
+      <span>ФИО</span>
+      <input type="text" id="addFio" placeholder="Фамилия Имя Отчество" autocapitalize="words" spellcheck="false">
+    </label>
+
+    <div class="fld">
+      <span>Пол</span>
+      <div class="seg" id="addPol" role="radiogroup" aria-label="Пол"></div>
+    </div>
+
+    <div class="fldrow">
+      <label class="fld">
+        <span>УИН</span>
+        <input type="text" id="addUin" class="mono" inputmode="numeric" placeholder="26-77-0123456" maxlength="13">
+      </label>
+      <label class="fld">
+        <span>Ступень</span>
+        <select id="addStupen"></select>
+      </label>
+    </div>
+
+    <div class="err" id="addErr"></div>
+    <div class="btnrow">
+      <button type="button" class="btn" id="addCancel">Отмена</button>
+      <button type="submit" class="btn primary" id="addSubmit">Добавить</button>
+    </div>
+  </form>
 </div>
 
 <div class="overlay" id="settingsOverlay" hidden>
@@ -648,8 +745,9 @@
   var toastTimer;
   var refreshBtn = document.getElementById('refreshBtn');
 
-  function toast(msg) {
+  function toast(msg, good) {
     toastEl.textContent = msg;
+    toastEl.classList.toggle('good', !!good);
     toastEl.classList.add('show');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 7000);
@@ -821,6 +919,11 @@
       row.appendChild(who);
       row.appendChild(stickerBtn);
       row.appendChild(toggle);
+      if (highlightNum !== null && String(item.num) === highlightNum) {
+        highlightNum = null;
+        row.classList.add('added');
+        setTimeout(function () { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 50);
+      }
       listEl.appendChild(row);
     });
 
@@ -997,6 +1100,209 @@
   }
 
   refreshBtn.addEventListener('click', function () { loadData('manual'); });
+
+  // ---------- Добавление участника ----------
+  var addOverlay = document.getElementById('addOverlay');
+  var addForm = document.getElementById('addForm');
+  var addFio = document.getElementById('addFio');
+  var addPol = document.getElementById('addPol');
+  var addUin = document.getElementById('addUin');
+  var addStupen = document.getElementById('addStupen');
+  var addErr = document.getElementById('addErr');
+  var addSubmit = document.getElementById('addSubmit');
+  var addNextNum = document.getElementById('addNextNum');
+  var ROMANS = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII','XIII','XIV','XV','XVI','XVII','XVIII'];
+  var polValue = '';
+  var addBusy = false;
+  var highlightNum = null;
+
+  function uniq(arr) {
+    var seen = {}, out = [];
+    arr.forEach(function (v) {
+      v = String(v == null ? '' : v).trim();
+      if (v && !seen[v]) { seen[v] = 1; out.push(v); }
+    });
+    return out;
+  }
+
+  // Варианты берём из самой таблицы — чтобы запись совпадала символ в символ
+  function stupenOptions() {
+    var have = uniq(data.map(function (d) { return d.stupen; }));
+    // Если в таблице ступени записаны по одному образцу («VI ступень»), дополняем недостающие
+    var sample = have.filter(function (v) { return /^[IVX]+\b/.test(v); })[0] || 'I ступень';
+    var tail = sample.replace(/^[IVX]+/, '');
+    var simple = have.every(function (v) { return v.replace(/^[IVX]+/, '') === tail; });
+    if (simple) {
+      ROMANS.forEach(function (r) { if (have.indexOf(r + tail) === -1) have.push(r + tail); });
+    }
+    return have.sort(function (a, b) {
+      return romanToInt(stupenRoman(a)) - romanToInt(stupenRoman(b)) || a.localeCompare(b, 'ru');
+    });
+  }
+
+  function polOptions() {
+    var have = uniq(data.map(function (d) { return d.pol; }));
+    ['мужской', 'женский'].forEach(function (v) {
+      var exists = have.some(function (h) { return h.toLowerCase() === v; });
+      if (!exists) have.push(v);
+    });
+    return have;
+  }
+
+  function nextNum() {
+    var max = 0;
+    data.forEach(function (d) { var n = parseInt(d.num, 10); if (n > max) max = n; });
+    return max + 1;
+  }
+
+  // «иВАНОВ  иван-петр» → «Иванов Иван-Петр»
+  function normFio(v) {
+    return String(v).replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|[\s-])([a-zа-яё])/g, function (m, sep, ch) {
+      return sep + ch.toUpperCase();
+    });
+  }
+
+  function uinDigits(v) { return String(v || '').replace(/\D/g, ''); }
+
+  // 11 цифр → 26-77-0123456
+  function fmtUin(v) {
+    var d = uinDigits(v).slice(0, 11);
+    if (d.length <= 2) return d;
+    if (d.length <= 4) return d.slice(0, 2) + '-' + d.slice(2);
+    return d.slice(0, 2) + '-' + d.slice(2, 4) + '-' + d.slice(4);
+  }
+
+  function setPol(v) {
+    polValue = v;
+    Array.prototype.forEach.call(addPol.children, function (b) {
+      b.setAttribute('aria-checked', b.getAttribute('data-v') === v ? 'true' : 'false');
+    });
+    addPol.parentNode.classList.remove('bad');
+  }
+
+  function showAddErr(msg, field) {
+    addErr.textContent = msg;
+    addErr.style.display = msg ? 'block' : 'none';
+    Array.prototype.forEach.call(addForm.querySelectorAll('.fld'), function (f) { f.classList.remove('bad'); });
+    if (field) {
+      field.closest('.fld').classList.add('bad');
+      if (field.focus) field.focus();
+    }
+  }
+
+  function openAdd() {
+    addStupen.innerHTML = '';
+    var ph = document.createElement('option');
+    ph.value = ''; ph.textContent = '— выберите —';
+    addStupen.appendChild(ph);
+    stupenOptions().forEach(function (v) {
+      var o = document.createElement('option');
+      o.value = v; o.textContent = v;
+      addStupen.appendChild(o);
+    });
+    addPol.innerHTML = '';
+    polOptions().forEach(function (v) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('data-v', v);
+      var lv = v.toLowerCase();
+      b.className = lv === 'мужской' ? 'm' : lv === 'женский' ? 'f' : '';
+      b.textContent = v.charAt(0).toUpperCase() + v.slice(1);
+      b.addEventListener('click', function () { setPol(v); });
+      addPol.appendChild(b);
+    });
+    addForm.reset();
+    setPol('');
+    showAddErr('');
+    addNextNum.textContent = data.length ? nextNum() : '—';
+    addOverlay.hidden = false;
+    setTimeout(function () { addFio.focus(); }, 30);
+  }
+
+  function closeAdd() {
+    if (addBusy) return;
+    addOverlay.hidden = true;
+  }
+
+  addUin.addEventListener('input', function () {
+    var f = fmtUin(addUin.value);
+    if (f !== addUin.value) addUin.value = f;
+  });
+  // Исправляешь поле — старая ошибка уходит
+  [addFio, addUin, addStupen].forEach(function (el) {
+    el.addEventListener(el === addStupen ? 'change' : 'input', function () {
+      el.closest('.fld').classList.remove('bad');
+      addErr.style.display = 'none';
+    });
+  });
+  addFio.addEventListener('blur', function () { if (addFio.value.trim()) addFio.value = normFio(addFio.value); });
+  document.getElementById('addBtn').addEventListener('click', openAdd);
+  document.getElementById('addCancel').addEventListener('click', closeAdd);
+  addOverlay.addEventListener('click', function (e) { if (e.target === addOverlay) closeAdd(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !addOverlay.hidden) closeAdd(); });
+
+  addForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (addBusy) return;
+    var fio = normFio(addFio.value);
+    var uin = fmtUin(addUin.value);
+    var stupen = addStupen.value;
+
+    if (fio.split(' ').length < 2) return showAddErr('Введите фамилию и имя (и отчество, если есть).', addFio);
+    if (!polValue) return showAddErr('Выберите пол.', addPol);
+    if (uinDigits(uin).length !== 11) return showAddErr('УИН — 11 цифр, например 26-77-0123456.', addUin);
+    if (!stupen) return showAddErr('Выберите ступень.', addStupen);
+    var dup = data.filter(function (d) { return uinDigits(d.uin) === uinDigits(uin); })[0];
+    if (dup) return showAddErr('Такой УИН уже в списке: №' + dup.num + ' ' + dup.fio + '.', addUin);
+    if (!scriptUrl) return showAddErr('Нет подключения к таблице.');
+
+    addFio.value = fio;
+    addBusy = true;
+    addSubmit.disabled = true;
+    addSubmit.textContent = 'Сохраняем…';
+    showAddErr('');
+    pendingSaves++;
+    writeGen++;
+    requestJSON(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'add', fio: fio, pol: polValue, uin: uin, stupen: stupen })
+    }, SAVE_TIMEOUT_MS)
+      .then(function (res) {
+        if (!res || !res.ok) {
+          var msg = (res && res.error) || 'скрипт вернул ok: false';
+          if (/неизвестн|некорректный номер строки/i.test(msg)) {
+            msg += '. Похоже, в Apps Script старая версия — обновите код и выпустите новую версию развёртывания';
+          }
+          throw new Error(msg);
+        }
+        highlightNum = res.num != null ? String(res.num) : null;
+        addBusy = false;
+        closeAdd();
+        toast('Добавлен №' + (res.num != null ? res.num : '') + ' ' + fio, true);
+        // Показываем нового участника: сбрасываем фильтр и поиск
+        searchEl.value = '';
+        if (filterMode !== 'all') document.querySelector('.stat[data-filter="all"]').click();
+        resyncAfterSaves = true;
+      })
+      .catch(function (err) {
+        var m = errText(err);
+        if (/не ответила/.test(m)) {
+          m += '. Строка могла добавиться — список обновится сам, проверьте его перед повтором';
+          resyncAfterSaves = true;
+        }
+        showAddErr('Не добавлено: ' + m);
+      })
+      .then(function () {
+        addBusy = false;
+        addSubmit.disabled = false;
+        addSubmit.textContent = 'Добавить';
+        pendingSaves--;
+        writeGen++;
+        afterSavesSettled();
+      });
+  });
   // Сеть вернулась — переподключаемся сами
   window.addEventListener('online', function () { if (overlay.hidden) loadData('background'); });
   window.addEventListener('offline', function () { setStatus('err', 'нет интернета'); });
@@ -1006,7 +1312,7 @@
   // Любая буква/цифра с клавиатуры идёт в поиск, где бы ни был фокус.
   // Delete — очистить поиск целиком.
   document.addEventListener('keydown', function (e) {
-    if (!overlay.hidden || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    if (!overlay.hidden || !addOverlay.hidden || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
     var inSearch = document.activeElement === searchEl;
 
     if (e.key === 'Delete') {

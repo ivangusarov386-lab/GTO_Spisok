@@ -4,6 +4,10 @@
 
 var SHEET_NAME = 'Список';
 var COL_NUM = 1;      // A — порядковый номер
+var COL_FIO = 2;      // B — ФИО
+var COL_UIN = 3;      // C — УИН
+var COL_STUPEN = 4;   // D — ступень
+var COL_POL = 5;      // E — пол
 var COL_PRESENT = 17; // Q — отметка «пришёл»
 
 function doGet(e) {
@@ -38,6 +42,10 @@ function doPost(e) {
   try {
     lock.waitLock(10000);
     var params = JSON.parse(e.postData.contents);
+    if (params.action === 'add') return jsonOut(addParticipant(params));
+    if (params.action && params.action !== 'mark') {
+      return jsonOut({ ok: false, error: 'неизвестное действие: ' + params.action });
+    }
     var row = parseInt(params.row, 10);
     var present = !!params.present;
     var sheet = getSheet();
@@ -69,6 +77,52 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Новый участник: строка сразу после последнего заполненного ФИО,
+// номер = максимальный в столбце A + 1, оформление — как у строки выше.
+function addParticipant(p) {
+  var fio = String(p.fio || '').replace(/\s+/g, ' ').trim();
+  var pol = String(p.pol || '').trim();
+  var uin = String(p.uin || '').trim();
+  var stupen = String(p.stupen || '').trim();
+  var uinDigits = uin.replace(/\D/g, '');
+  if (fio.split(' ').length < 2) return { ok: false, error: 'нужны фамилия и имя' };
+  if (!pol) return { ok: false, error: 'не указан пол' };
+  if (uinDigits.length !== 11) return { ok: false, error: 'УИН должен содержать 11 цифр' };
+  if (!stupen) return { ok: false, error: 'не указана ступень' };
+
+  var sheet = getSheet();
+  var lastRow = Math.max(sheet.getLastRow(), 1);
+  var maxNum = 0, lastFioRow = 1;
+  if (lastRow >= 2) {
+    var vals = sheet.getRange(2, 1, lastRow - 1, COL_POL).getValues(); // A:E
+    for (var i = 0; i < vals.length; i++) {
+      var n = parseInt(vals[i][COL_NUM - 1], 10);
+      if (n > maxNum) maxNum = n;
+      if (String(vals[i][COL_FIO - 1]).trim() !== '') lastFioRow = i + 2;
+      // Защита от двойного добавления (повтор после обрыва связи)
+      if (String(vals[i][COL_UIN - 1]).replace(/\D/g, '') === uinDigits) {
+        return { ok: false, error: 'УИН уже есть в таблице: №' + vals[i][COL_NUM - 1] + ' ' + vals[i][COL_FIO - 1] };
+      }
+    }
+  }
+  var num = maxNum + 1;
+  var newRow = lastFioRow + 1;
+  if (newRow > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), 1);
+
+  // Оформление (шрифты, рамки, форматы) и флажок в Q — как у строки выше
+  if (lastFioRow >= 2) {
+    var lastCol = sheet.getLastColumn();
+    sheet.getRange(lastFioRow, 1, 1, lastCol).copyTo(sheet.getRange(newRow, 1, 1, lastCol), { formatOnly: true });
+    var dv = sheet.getRange(lastFioRow, COL_PRESENT).getDataValidation();
+    if (dv) sheet.getRange(newRow, COL_PRESENT).setDataValidation(dv);
+  }
+  sheet.getRange(newRow, COL_UIN).setNumberFormat('@'); // УИН — текстом, чтобы не стал числом
+  sheet.getRange(newRow, COL_NUM, 1, 5).setValues([[num, fio, uin, stupen, pol]]); // A:E
+  sheet.getRange(newRow, COL_PRESENT).setValue(false);
+  SpreadsheetApp.flush();
+  return { ok: true, row: newRow, num: num };
 }
 
 function getSheet() {
