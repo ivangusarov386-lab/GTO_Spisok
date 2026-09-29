@@ -253,13 +253,16 @@
   #printArea { display: none; }
   @media print {
     @page { size: 58mm 40mm; margin: 0; }
-    body * { visibility: hidden; }
-    #printArea, #printArea * { visibility: visible; }
+    /* Убираем остальную страницу из вёрстки целиком (visibility оставлял
+       место под весь список — выходили десятки страниц) */
+    html, body { height: auto !important; margin: 0 !important; padding: 0 !important; background: #fff !important; }
+    body > *:not(#printArea) { display: none !important; }
     #printArea {
       display: flex !important;
-      position: fixed;
-      top: 0; left: 0;
       width: 58mm; height: 40mm;
+      overflow: hidden;
+      break-inside: avoid;
+      page-break-inside: avoid;
       flex-direction: column;
       align-items: center;
       justify-content: center;
@@ -273,8 +276,8 @@
     }
     #printArea .p-rule {
       width: 40mm;
-      height: 0.6mm;
-      background: #000;
+      height: 0;
+      border-top: 0.6mm solid #000; /* фон браузер по умолчанию не печатает */
       margin: 2.5mm 0;
     }
     #printArea .p-stupen {
