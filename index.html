@@ -9,23 +9,53 @@
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="app.css">
 <style>
+  /* ---- Настройка поворота стикера ---- */
+  .modal { max-height: calc(100vh - 40px); overflow: auto; }
+  .modal .sep { height: 1px; background: var(--border); margin: 6px 0 18px; }
+  .stkset { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .seg.rot { grid-template-columns: repeat(2, 1fr); flex: 1; min-width: 150px; }
+  .seg.rot button[aria-checked="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .stkprev { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 130px; }
+  .stkpage {
+    background: #fff; border: 1px dashed #9aa4b2; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+    transition: width .2s, height .2s;
+  }
+  .stkbox {
+    flex: none; width: 116px; height: 80px; /* 58×40 мм, 1 мм = 2 px */
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: #000; font-family: 'IBM Plex Mono', monospace; font-weight: 700; line-height: 1;
+    transition: transform .2s;
+  }
+  .stkbox b:first-child { font-size: 30px; }
+  .stkbox b:last-child { font-size: 23px; }
+  .stkbox i { width: 80px; border-top: 1.2px solid #000; margin: 5px 0; }
+  .stkcap { font-size: 11.5px; color: var(--muted); }
+
   /* ---- Печать стикера ---- */
   #printArea { display: none; }
   @media print {
-    @page { size: 58mm 40mm; margin: 0; }
+    /* Размер страницы и поворот — в <style id="pageStyle">, их задаёт настройка «Поворот стикера» */
     /* Убираем остальную страницу из вёрстки целиком (visibility оставлял
        место под весь список — выходили десятки страниц) */
     html, body { height: auto !important; margin: 0 !important; padding: 0 !important; background: #fff !important; }
     body > *:not(#printArea) { display: none !important; }
     #printArea {
       display: flex !important;
-      width: 58mm; height: 40mm;
       overflow: hidden;
       break-inside: avoid;
       page-break-inside: avoid;
+      align-items: center;
+      justify-content: center;
+    }
+    #printArea .sticker {
+      flex: none;
+      width: 58mm; height: 40mm;
+      display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      transform-origin: center;
     }
     #printArea .p-num {
       font-family: 'IBM Plex Mono', 'DejaVu Sans Mono', Menlo, Consolas, 'Courier New', monospace;
@@ -47,6 +77,13 @@
       line-height: 1;
       color: #000;
     }
+  }
+</style>
+<style id="pageStyle">
+  @media print {
+    @page { size: 40mm 58mm; margin: 0; }
+    #printArea { width: 40mm; height: 58mm; }
+    #printArea .sticker { transform: rotate(90deg); }
   }
 </style>
 </head>
@@ -109,9 +146,11 @@
 <div class="toast" id="toast" role="alert"></div>
 
 <div id="printArea">
-  <div class="p-num" id="pNum"></div>
-  <div class="p-rule"></div>
-  <div class="p-stupen" id="pStupen"></div>
+  <div class="sticker">
+    <div class="p-num" id="pNum"></div>
+    <div class="p-rule"></div>
+    <div class="p-stupen" id="pStupen"></div>
+  </div>
 </div>
 
 <div class="overlay" id="addOverlay" hidden>
@@ -155,6 +194,26 @@
     <input type="text" id="urlInput" placeholder="https://script.google.com/macros/s/.../exec">
     <div class="err" id="urlErr">Не удалось подключиться по этому адресу.</div>
     <p class="hint">Проверка: <a href="#" id="openScript" target="_blank" rel="noopener">открыть адрес скрипта в новой вкладке</a>. Если всё работает, там будет текст, начинающийся с <code>{"ok":true</code>.</p>
+
+    <div class="sep"></div>
+    <h2>Стикер 58×40</h2>
+    <p>Если на наклейке текст выходит боком или вверх ногами — поверните его. Настройка сохраняется на этом компьютере.</p>
+    <div class="stkset">
+      <div class="seg rot" id="rotSeg" role="radiogroup" aria-label="Поворот стикера">
+        <button type="button" role="radio" data-r="0">0°</button>
+        <button type="button" role="radio" data-r="90">90°</button>
+        <button type="button" role="radio" data-r="180">180°</button>
+        <button type="button" role="radio" data-r="270">270°</button>
+      </div>
+      <div class="stkprev" aria-hidden="true">
+        <div class="stkpage" id="stkPage">
+          <div class="stkbox" id="stkBox"><b>12</b><i></i><b>VI</b></div>
+        </div>
+        <span class="stkcap" id="stkCap"></span>
+      </div>
+    </div>
+    <button type="button" class="btn" id="testPrint" style="margin-bottom:16px">Пробная печать</button>
+
     <div class="btnrow">
       <button class="btn" id="closeSettings">Отмена</button>
       <button class="btn primary" id="saveSettings">Сохранить</button>
@@ -383,6 +442,43 @@
     document.getElementById('pStupen').textContent = stupenRoman(item.stupen);
     window.print();
   }
+
+  // ---- Поворот стикера ----
+  // 0/180 — страница 58×40, 90/270 — страница 40×58 (этикетка заправлена «на боку»)
+  var ROT_KEY = 'gto_sticker_rotation';
+  var rotation = 90;
+  try {
+    var savedRot = localStorage.getItem(ROT_KEY);
+    if (savedRot !== null && [0, 90, 180, 270].indexOf(+savedRot) !== -1) rotation = +savedRot;
+  } catch (e) {}
+
+  function applyRotation() {
+    var side = rotation % 180 !== 0;
+    var W = side ? 40 : 58, H = side ? 58 : 40;
+    document.getElementById('pageStyle').textContent =
+      '@media print{@page{size:' + W + 'mm ' + H + 'mm;margin:0}' +
+      '#printArea{width:' + W + 'mm;height:' + H + 'mm}' +
+      '#printArea .sticker{transform:rotate(' + rotation + 'deg)}}';
+    var page = document.getElementById('stkPage');
+    page.style.width = W * 2 + 'px';
+    page.style.height = H * 2 + 'px';
+    document.getElementById('stkBox').style.transform = 'rotate(' + rotation + 'deg)';
+    document.getElementById('stkCap').textContent = 'страница ' + W + '×' + H + ' мм';
+    Array.prototype.forEach.call(document.querySelectorAll('#rotSeg button'), function (b) {
+      b.setAttribute('aria-checked', +b.getAttribute('data-r') === rotation ? 'true' : 'false');
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#rotSeg button'), function (b) {
+    b.addEventListener('click', function () {
+      rotation = +b.getAttribute('data-r');
+      try { localStorage.setItem(ROT_KEY, String(rotation)); } catch (e) {}
+      applyRotation();
+    });
+  });
+  document.getElementById('testPrint').addEventListener('click', function () {
+    printSticker({ num: 12, stupen: 'VI ступень' });
+  });
+  applyRotation();
 
   var LOAD_TIMEOUT_MS = 20000;   // сколько ждём список
   var SAVE_TIMEOUT_MS = 30000;   // сколько ждём сохранение отметки
