@@ -154,6 +154,7 @@
     <p>Вставь URL веб-приложения Apps Script (заканчивается на <code>/exec</code>), развёрнутого в таблице «протокол главный».</p>
     <input type="text" id="urlInput" placeholder="https://script.google.com/macros/s/.../exec">
     <div class="err" id="urlErr">Не удалось подключиться по этому адресу.</div>
+    <p class="hint">Проверка: <a href="#" id="openScript" target="_blank" rel="noopener">открыть адрес скрипта в новой вкладке</a>. Если всё работает, там будет текст, начинающийся с <code>{"ok":true</code>.</p>
     <div class="btnrow">
       <button class="btn" id="closeSettings">Отмена</button>
       <button class="btn primary" id="saveSettings">Сохранить</button>
@@ -213,6 +214,11 @@
   var overlay = document.getElementById('settingsOverlay');
   var urlInput = document.getElementById('urlInput');
   var urlErr = document.getElementById('urlErr');
+  document.getElementById('openScript').addEventListener('click', function (e) {
+    var u = urlInput.value.trim() || scriptUrl;
+    if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(u)) { e.preventDefault(); return; }
+    this.href = u;
+  });
 
   document.getElementById('settingsBtn').addEventListener('click', function () {
     urlInput.value = scriptUrl;
@@ -405,7 +411,7 @@
     var req = fetch(url, opts).then(function (r) {
       return r.text().then(function (t) {
         try { return JSON.parse(t); } catch (e) {
-          throw new Error('скрипт ответил не JSON (HTTP ' + r.status + '). Проверьте doPost и доступ «Все» в развёртывании');
+          throw new Error('скрипт ответил не данными, а страницей (HTTP ' + r.status + ')' + googleErrorText(t));
         }
       });
     });
@@ -415,9 +421,20 @@
     );
   }
 
+  // Вытаскиваем текст ошибки со страницы Google («TypeError: …», «Script function not found» и т.п.)
+  function googleErrorText(html) {
+    var t = String(html || '')
+      .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ').trim();
+    var m = t.match(/(TypeError|ReferenceError|SyntaxError|Exception|Error|Ошибка|Script function not found|Authorization is required|Требуется авторизация|Sorry, unable to open the file|не удается открыть файл)[^.]{0,160}/i);
+    return m ? ': «' + m[0].trim() + '»' : '';
+  }
+
   function errText(err) {
     var m = err && err.message;
-    if (!m || m === 'Failed to fetch' || /NetworkError|Load failed|network/i.test(m)) return 'нет интернета или скрипт недоступен';
+    if (!m || m === 'Failed to fetch' || /NetworkError|Load failed|network/i.test(m)) return 'нет интернета, либо Google не пускает к скрипту (развёртывание удалено или доступ не «Все»)';
     return m;
   }
 
@@ -528,6 +545,7 @@
           toast('Нет связи с таблицей: ' + errText(err) + '. Нажмите «обновить» ещё раз.');
         } else if (!background) {
           urlInput.value = scriptUrl;
+          urlErr.textContent = 'Не удалось подключиться: ' + errText(err) + '.';
           urlErr.style.display = 'block';
           overlay.hidden = false;
         }

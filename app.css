@@ -580,3 +580,5 @@
     .tabs a { padding: 6px 10px; font-size: 13.5px; }
   }
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .modal .hint { font-size: 12.5px; margin: -2px 0 14px; }
+  .modal a { color: var(--accent); }

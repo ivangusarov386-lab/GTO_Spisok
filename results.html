@@ -417,7 +417,11 @@
     var req = fetch(url, ctrl ? { cache: 'no-store', signal: ctrl.signal } : { cache: 'no-store' })
       .then(function (r) {
         return r.text().then(function (t) {
-          try { return JSON.parse(t); } catch (e) { throw new Error('скрипт ответил не JSON (HTTP ' + r.status + ')'); }
+          try { return JSON.parse(t); } catch (e) {
+            var txt = t.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+            var m = txt.match(/(TypeError|ReferenceError|SyntaxError|Exception|Error|Ошибка|Script function not found|Authorization is required|Требуется авторизация)[^.]{0,160}/i);
+            throw new Error('скрипт ответил не данными, а страницей (HTTP ' + r.status + ')' + (m ? ': «' + m[0].trim() + '»' : ''));
+          }
         });
       });
     return Promise.race([req, timeout]).then(
@@ -460,7 +464,7 @@
         if (manual || failStreak >= 2 || !data.length) setStatus('err', 'нет связи с таблицей');
         if (manual || !data.length) {
           var m = err && err.message;
-          if (!m || m === 'Failed to fetch' || /NetworkError|Load failed/i.test(m)) m = 'нет интернета или скрипт недоступен';
+          if (!m || m === 'Failed to fetch' || /NetworkError|Load failed/i.test(m)) m = 'нет интернета, либо Google не пускает к скрипту (развёртывание удалено или доступ не «Все»)';
           toast('Нет связи с таблицей: ' + m);
         }
       })
