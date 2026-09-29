@@ -647,7 +647,6 @@
   var filterMode = 'all'; // all | present | rest
   var toastTimer;
   var refreshBtn = document.getElementById('refreshBtn');
-  var loadingManual = false;
 
   function toast(msg) {
     toastEl.textContent = msg;
@@ -834,6 +833,58 @@
     window.print();
   }
 
+  var LOAD_TIMEOUT_MS = 20000;   // сколько ждём список
+  var SAVE_TIMEOUT_MS = 30000;   // сколько ждём сохранение отметки
+  var loading = null;            // текущая загрузка списка — всегда не больше одной
+  var loadSeq = 0;               // номер последней загрузки (старые ответы игнорируем)
+  var cancelLoad = null;         // отменить текущую загрузку
+  var loadStartedAt = 0;
+  var failStreak = 0;            // неудач подряд (для фонового обновления)
+  var resyncAfterSaves = false;  // сверить список с таблицей, когда сохранения закончатся
+
+  // Запрос к Apps Script с ограничением по времени и понятной ошибкой
+  function requestJSON(url, opts, timeoutMs, onCancel) {
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    if (ctrl) opts.signal = ctrl.signal;
+    var timer;
+    var timeout = new Promise(function (_, reject) {
+      timer = setTimeout(function () {
+        reject(new Error('таблица не ответила за ' + Math.round(timeoutMs / 1000) + ' с'));
+        if (ctrl) ctrl.abort();
+      }, timeoutMs);
+      if (onCancel) onCancel(function () {
+        reject(new Error('отменено'));
+        if (ctrl) ctrl.abort();
+      });
+    });
+    var req = fetch(url, opts).then(function (r) {
+      return r.text().then(function (t) {
+        try { return JSON.parse(t); } catch (e) {
+          throw new Error('скрипт ответил не JSON (HTTP ' + r.status + '). Проверьте doPost и доступ «Все» в развёртывании');
+        }
+      });
+    });
+    return Promise.race([req, timeout]).then(
+      function (v) { clearTimeout(timer); return v; },
+      function (e) { clearTimeout(timer); throw e; }
+    );
+  }
+
+  function errText(err) {
+    var m = err && err.message;
+    if (!m || m === 'Failed to fetch' || /NetworkError|Load failed|network/i.test(m)) return 'нет интернета или скрипт недоступен';
+    return m;
+  }
+
+  function okStatus() { setStatus('ok', 'подключено · ' + data.length); }
+
+  function afterSavesSettled() {
+    if (pendingSaves === 0 && resyncAfterSaves && !loading) {
+      resyncAfterSaves = false;
+      loadData('background');
+    }
+  }
+
   function setPresent(item, value, rowEl) {
     var prev = item.present;
     item.present = value;
@@ -845,20 +896,15 @@
     if (!scriptUrl) return;
     pendingSaves++;
     writeGen++;
-    fetch(scriptUrl, {
+    requestJSON(scriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ row: item.row, num: item.num, present: value })
-    }).then(function (r) {
-        return r.text().then(function (t) {
-          try { return JSON.parse(t); } catch (e) {
-            throw new Error('скрипт ответил не JSON (HTTP ' + r.status + '). Проверьте doPost и доступ «Все» в развёртывании');
-          }
-        });
-      })
+    }, SAVE_TIMEOUT_MS)
       .then(function (res) {
         if (!res || !res.ok) throw new Error((res && res.error) || 'скрипт вернул ok: false');
-        setStatus('ok', 'подключено · ' + data.length);
+        failStreak = 0;
+        okStatus();
       })
       .catch(function (err) {
         item.present = prev;
@@ -869,16 +915,17 @@
         updateCounts();
         if (filterMode !== 'all') render();
         setStatus('err', 'ошибка сохранения');
-        var reason = err && err.message && err.message !== 'Failed to fetch' ? err.message : 'нет связи со скриптом';
-        toast('Не сохранено: ' + item.fio + ' — ' + reason);
+        toast('Не сохранено: ' + item.fio + ' — ' + errText(err));
+        // При таймауте запись могла всё же дойти — сверимся с таблицей
+        resyncAfterSaves = true;
       })
       .then(function () {
         pendingSaves--;
         writeGen++;
+        afterSavesSettled();
       });
   }
 
-  // background: true — тихое автообновление (без модалки при ошибке)
   // mode: undefined — первая загрузка (при ошибке открываем настройки),
   //       'manual' — кнопка «обновить», 'background' — тихое автообновление
   function loadData(mode) {
@@ -889,30 +936,51 @@
       overlay.hidden = false;
       return;
     }
+    if (loading) {
+      // Кнопка: свежий запрос (до 2 с) просто дожидаемся, зависший — отменяем и шлём заново.
+      // Автообновление второй запрос параллельно не запускает никогда.
+      if (!manual) return;
+      if (Date.now() - loadStartedAt < 2000) { refreshBtn.classList.add('spin'); return; }
+      cancelLoad();
+    }
+    if (manual) refreshBtn.classList.add('spin');
     // Не перетираем локальные отметки, пока они сохраняются
-    if (background && pendingSaves > 0) return;
-    if (manual && loadingManual) return;
+    if (background && pendingSaves > 0) { resyncAfterSaves = true; return; }
+
     var gen = writeGen;
     var url = scriptUrl;
-    if (!background) setStatus('', 'загрузка…');
-    if (manual) { loadingManual = true; refreshBtn.classList.add('spin'); }
-    fetch(url, { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
+    if (manual) setStatus('', 'обновление…');
+    else if (!background) setStatus('', 'загрузка…');
+
+    var seq = ++loadSeq;
+    loadStartedAt = Date.now();
+    loading = requestJSON(url, { cache: 'no-store' }, LOAD_TIMEOUT_MS, function (c) { cancelLoad = c; })
       .then(function (res) {
-        if (!res.ok) throw new Error('bad response');
-        // Ответ устарел: за время запроса была отметка или сменился адрес
-        if (gen !== writeGen || pendingSaves > 0 || url !== scriptUrl) return;
+        if (seq !== loadSeq) return; // этот запрос заменён новым
+        if (!res || !res.ok) throw new Error((res && res.error) || 'скрипт вернул ошибку');
+        if (url !== scriptUrl) return;
+        failStreak = 0;
+        // Пока ждали ответ, была отметка — ответ устарел, перезагрузим после сохранения
+        if (gen !== writeGen || pendingSaves > 0) {
+          resyncAfterSaves = true;
+          okStatus();
+          return;
+        }
         var fresh = res.data || [];
         var changed = JSON.stringify(fresh) !== JSON.stringify(data);
-        data = fresh;
-        setStatus('ok', 'подключено · ' + data.length);
+        // Без изменений оставляем прежние объекты: строки на экране привязаны именно к ним
+        if (changed) data = fresh;
+        okStatus();
         if (changed || !background) render();
       })
-      .catch(function () {
-        if (url !== scriptUrl) return;
-        setStatus('err', 'нет связи с таблицей');
-        if (manual) {
-          toast('Нет связи с таблицей. Проверьте интернет и нажмите «обновить» ещё раз.');
+      .catch(function (err) {
+        if (seq !== loadSeq || url !== scriptUrl) return;
+        failStreak++;
+        var userAsked = manual || refreshBtn.classList.contains('spin');
+        // Одна неудача фонового обновления — не повод пугать красным
+        if (!background || userAsked || failStreak >= 2) setStatus('err', 'нет связи с таблицей');
+        if (userAsked) {
+          toast('Нет связи с таблицей: ' + errText(err) + '. Нажмите «обновить» ещё раз.');
         } else if (!background) {
           urlInput.value = scriptUrl;
           urlErr.style.display = 'block';
@@ -920,13 +988,18 @@
         }
       })
       .then(function () {
-        if (manual) { loadingManual = false; refreshBtn.classList.remove('spin'); }
+        if (seq !== loadSeq) return;
+        loading = null;
+        cancelLoad = null;
+        refreshBtn.classList.remove('spin');
+        afterSavesSettled();
       });
   }
 
   refreshBtn.addEventListener('click', function () { loadData('manual'); });
   // Сеть вернулась — переподключаемся сами
   window.addEventListener('online', function () { if (overlay.hidden) loadData('background'); });
+  window.addEventListener('offline', function () { setStatus('err', 'нет интернета'); });
 
   searchEl.addEventListener('input', render);
 
