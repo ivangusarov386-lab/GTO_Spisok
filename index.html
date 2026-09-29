@@ -404,8 +404,12 @@
     window.print();
   }
 
-  var LOAD_TIMEOUT_MS = 20000;   // сколько ждём список
-  var SAVE_TIMEOUT_MS = 30000;   // сколько ждём сохранение отметки
+  // Google Apps Script после простоя «просыпается» медленно — ждём с запасом
+  var LOAD_TIMEOUT_MS = 60000;   // сколько ждём список
+  var SAVE_TIMEOUT_MS = 60000;   // сколько ждём сохранение отметки / добавление
+  var INITIAL_RETRIES = 2;       // первая загрузка: сколько раз повторить сама, прежде чем показать ошибку
+  var initialTries = 0;
+  var loadTicker = null;         // счётчик секунд «загрузка… 12 с»
   var loading = null;            // текущая загрузка списка — всегда не больше одной
   var loadSeq = 0;               // номер последней загрузки (старые ответы игнорируем)
   var cancelLoad = null;         // отменить текущую загрузку
@@ -531,8 +535,16 @@
 
     var gen = writeGen;
     var url = scriptUrl;
-    if (manual) setStatus('', 'обновление…');
-    else if (!background) setStatus('', 'загрузка…');
+    var label = manual ? 'обновление' : (!background ? (initialTries ? 'повторная попытка' : 'загрузка') : '');
+    clearInterval(loadTicker);
+    if (label) {
+      var started = Date.now();
+      setStatus('', label + '…');
+      loadTicker = setInterval(function () {
+        var sec = Math.round((Date.now() - started) / 1000);
+        if (sec >= 3) setStatus('', label + '… ' + sec + ' с');
+      }, 1000);
+    }
 
     var seq = ++loadSeq;
     loadStartedAt = Date.now();
@@ -561,7 +573,12 @@
         var userAsked = manual || refreshBtn.classList.contains('spin');
         // Одна неудача фонового обновления — не повод пугать красным
         if (!background || userAsked || failStreak >= 2) setStatus('err', 'нет связи с таблицей');
-        if (userAsked) {
+        if (!background && !userAsked && initialTries < INITIAL_RETRIES) {
+          // Первая загрузка: не пугаем окном сразу — пробуем ещё раз
+          initialTries++;
+          setStatus('', 'повторная попытка…');
+          setTimeout(function () { loadData(); }, 2000);
+        } else if (userAsked) {
           toast('Нет связи с таблицей: ' + errText(err) + '. Нажмите «обновить» ещё раз.');
         } else if (!background) {
           urlInput.value = scriptUrl;
@@ -572,6 +589,7 @@
       })
       .then(function () {
         if (seq !== loadSeq) return;
+        clearInterval(loadTicker);
         loading = null;
         cancelLoad = null;
         refreshBtn.classList.remove('spin');

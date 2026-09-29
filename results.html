@@ -187,7 +187,7 @@
   var LS_KEY = 'gto_apps_script_url';
   var DEFAULT_URL = 'https://script.google.com/macros/s/AKfycbzUX-JIhoZRpt_FiNAZGpMI0p0bbGNarGGp6Q9y2NXflc6O9cHDYVoKJq2CPIZ5JSbR/exec';
   var REFRESH_MS = 30000;
-  var TIMEOUT_MS = 20000;
+  var TIMEOUT_MS = 60000;  // Apps Script после простоя «просыпается» медленно
   var scriptUrl = DEFAULT_URL;
   try { scriptUrl = localStorage.getItem(LS_KEY) || DEFAULT_URL; } catch (e) {}
 
