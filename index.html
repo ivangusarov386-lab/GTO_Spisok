@@ -58,12 +58,12 @@
   }
 </style>
 <style>
-  /* Этикетка 58×40 заправлена в Xprinter «на боку»: страница 40×58, стикер повёрнут.
-     Нужен другой поворот — поменяйте 270deg на 90deg / 180deg / 0deg (для 0 и 180 страница 58mm 40mm). */
+  /* Этикетка Xprinter: 58 мм поперёк принтера, 40 мм вдоль подачи — страница ровно 58×40.
+     Поворот 180°, чтобы у выхода принтера текст читался прямо. Если окажется вверх ногами — поменяйте 180deg на 0deg. */
   @media print {
-    @page { size: 40mm 58mm; margin: 0; }
-    #printArea { width: 40mm; height: 58mm; }
-    #printArea .sticker { transform: rotate(270deg); }
+    @page { size: 58mm 40mm; margin: 0; }
+    #printArea { width: 58mm; height: 40mm; }
+    #printArea .sticker { transform: rotate(180deg); }
   }
 </style>
 </head>
