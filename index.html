@@ -339,7 +339,8 @@
 
     filtered.forEach(function (item) {
       var row = document.createElement('div');
-      row.className = 'row' + (item.present ? ' present' : '');
+      row.className = 'row' + (item.present ? ' present' : '') + (item.local ? ' local-' + item.local : '');
+      row.setAttribute('data-key', uinDigits(item.uin));
 
       var num = document.createElement('div');
       num.className = 'num mono';
@@ -363,6 +364,24 @@
       else if (item.pol === 'женский') meta.appendChild(span('chip f', 'жен.'));
       else if (item.pol) meta.appendChild(span('chip', item.pol));
       if (item.uin) meta.appendChild(fillHighlighted(span('uin mono', ''), item.uin, q));
+      if (item.local === 'pending') {
+        meta.appendChild(span('chip saving', 'сохраняется в таблицу…'));
+      } else if (item.local === 'failed') {
+        var bad = span('chip failed', 'не в таблице');
+        bad.title = item.error || '';
+        meta.appendChild(bad);
+        var retry = document.createElement('button');
+        retry.type = 'button'; retry.className = 'minibtn'; retry.textContent = 'Повторить';
+        retry.addEventListener('click', function () { sendAdd(item); });
+        var drop = document.createElement('button');
+        drop.type = 'button'; drop.className = 'minibtn'; drop.textContent = 'Убрать';
+        drop.addEventListener('click', function () {
+          data = data.filter(function (d) { return d !== item; });
+          render();
+        });
+        meta.appendChild(retry);
+        meta.appendChild(drop);
+      }
       who.appendChild(fio);
       who.appendChild(meta);
 
@@ -500,6 +519,8 @@
     if (value) { void rowEl.offsetWidth; rowEl.classList.add('flash'); }
     updateCounts();
 
+    // Строка ещё создаётся в таблице (или не создалась) — отметку отправим после записи
+    if (item.local) return;
     if (!scriptUrl) return;
     pendingSaves++;
     writeGen++;
@@ -594,6 +615,10 @@
           return;
         }
         var fresh = res.data || [];
+        // Участники, добавленные на сайте, но ещё не записанные в таблицу, остаются в списке
+        data.forEach(function (d) {
+          if (d.local && !fresh.some(function (f) { return uinDigits(f.uin) === uinDigits(d.uin); })) fresh.push(d);
+        });
         var changed = JSON.stringify(fresh) !== JSON.stringify(data);
         // Без изменений оставляем прежние объекты: строки на экране привязаны именно к ним
         if (changed) data = fresh;
@@ -788,28 +813,36 @@
     if (dup) return showAddErr('Такой УИН уже в списке: №' + dup.num + ' ' + dup.fio + '.', addUin);
     if (!scriptUrl) return showAddErr('Нет подключения к таблице.');
 
-    function added(num) {
-      highlightNum = num != null ? String(num) : null;
-      addBusy = false;
-      closeAdd();
-      toast('Добавлен №' + (num != null ? num : '') + ' ' + fio, true);
-      // Показываем нового участника: сбрасываем фильтр и поиск
-      searchEl.value = '';
-      if (filterMode !== 'all') document.querySelector('.stat[data-filter="all"]').click();
-      resyncAfterSaves = true;
-    }
+    // Участник сразу появляется в списке, а в таблицу уходит параллельно
+    var item = {
+      row: null, num: nextNum(), fio: fio, uin: uin, stupen: stupen, pol: polValue, present: false,
+      local: 'pending' // pending — сохраняется, failed — не удалось записать в таблицу
+    };
+    data.push(item);
+    closeAdd();
+    searchEl.value = '';
+    highlightNum = String(item.num);
+    if (filterMode !== 'all') document.querySelector('.stat[data-filter="all"]').click();
+    else render();
+    toast('Добавлен №' + item.num + ' ' + fio + ' — сохраняем в таблицу…', true);
+    sendAdd(item);
+  });
 
-    addFio.value = fio;
-    addBusy = true;
-    addSubmit.disabled = true;
-    addSubmit.textContent = 'Сохраняем…';
-    showAddErr('');
+  function rowElFor(item) {
+    return listEl.querySelector('[data-key="' + uinDigits(item.uin) + '"]') || document.createElement('div');
+  }
+
+  function sendAdd(item) {
+    item.local = 'pending';
+    item.error = '';
+    render();
     pendingSaves++;
     writeGen++;
+    var found = null;
     requestJSON(scriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'add', fio: fio, pol: polValue, uin: uin, stupen: stupen })
+      body: JSON.stringify({ action: 'add', fio: item.fio, pol: item.pol, uin: item.uin, stupen: item.stupen })
     }, SAVE_TIMEOUT_MS)
       .then(function (res) {
         if (!res || !res.ok) {
@@ -819,34 +852,50 @@
           }
           throw scriptError(msg);
         }
-        added(res.num);
+        return { num: res.num, row: res.row };
       })
       .catch(function (err) {
         if (err.definite) throw err;
         // Ответ потерялся — проверяем, появилась ли строка в таблице
-        addSubmit.textContent = 'Проверяем…';
-        var found = null;
         return verifyWrite(function (list) {
-          found = list.filter(function (d) { return uinDigits(d.uin) === uinDigits(uin); })[0] || null;
+          found = list.filter(function (d) { return uinDigits(d.uin) === uinDigits(item.uin); })[0] || null;
           return !!found;
         }).then(function (ok) {
           if (!ok) throw err;
-          added(found.num);
+          return { num: found.num, row: found.row };
         });
       })
+      .then(function (saved) {
+        var oldNum = item.num;
+        delete item.local;
+        delete item.error;
+        item.row = saved.row;
+        if (saved.num != null) item.num = saved.num;
+        if (String(oldNum) !== String(item.num)) {
+          toast('№' + oldNum + ' ' + item.fio + ' записан в таблицу под №' + item.num + ' (номер был занят). Проверьте стикер.');
+        }
+        render();
+        // Отметили «пришёл», пока строка создавалась, — отправляем отметку
+        if (item.present) {
+          item.present = false;
+          setPresent(item, true, rowElFor(item));
+        }
+      })
       .catch(function (err) {
-        resyncAfterSaves = true;
-        showAddErr('Не добавлено: ' + errText(err));
+        item.local = 'failed';
+        item.error = errText(err);
+        render();
+        setStatus('err', 'ошибка сохранения');
+        toast('Не записан в таблицу: №' + item.num + ' ' + item.fio + ' — ' + item.error);
       })
       .then(function () {
-        addBusy = false;
-        addSubmit.disabled = false;
-        addSubmit.textContent = 'Добавить';
         pendingSaves--;
         writeGen++;
+        resyncAfterSaves = true;
         afterSavesSettled();
       });
-  });
+  }
+
   // Сеть вернулась — переподключаемся сами
   window.addEventListener('online', function () { if (overlay.hidden) loadData('background'); });
   window.addEventListener('offline', function () { setStatus('err', 'нет интернета'); });
