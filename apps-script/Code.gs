@@ -9,8 +9,13 @@ var COL_UIN = 3;      // C — УИН
 var COL_STUPEN = 4;   // D — ступень
 var COL_POL = 5;      // E — пол
 var COL_PRESENT = 17; // Q — отметка «пришёл»
+var COL_RES_FIRST = 6;  // F — первый норматив (отжимание)
+var COL_RES_LAST = 16;  // P — последний норматив (60м)
+var COL_CLASS = 18;     // R — класс (цифра)
+var COL_LETTER = 19;    // S — буква класса
 
 function doGet(e) {
+  if (e && e.parameter && e.parameter.view === 'results') return jsonOut(getResults());
   var sheet = getSheet();
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) {
@@ -123,6 +128,47 @@ function addParticipant(p) {
   sheet.getRange(newRow, COL_PRESENT).setValue(false);
   SpreadsheetApp.flush();
   return { ok: true, row: newRow, num: num };
+}
+
+// Витрина результатов: заголовки нормативов из строки 1 и значения ровно
+// как они видны в таблице (getDisplayValues — «12,10» не превратится в 12.1)
+function getResults() {
+  var sheet = getSheet();
+  var lastRow = sheet.getLastRow();
+  var lastCol = Math.min(COL_LETTER, sheet.getMaxColumns()); // A:S
+  var head = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
+  var disciplines = [];
+  for (var c = COL_RES_FIRST; c <= COL_RES_LAST; c++) {
+    disciplines.push({ col: columnLetter(c), name: String(head[c - 1] || columnLetter(c)).trim() });
+  }
+  var data = [];
+  if (lastRow >= 2) {
+    var shown = sheet.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
+    var raw = sheet.getRange(2, COL_PRESENT, lastRow - 1, 1).getValues();
+    for (var i = 0; i < shown.length; i++) {
+      var r = shown[i];
+      if (String(r[0]).trim() === '' || String(r[1]).trim() === '') continue;
+      data.push({
+        row: i + 2,
+        num: r[COL_NUM - 1],
+        fio: r[COL_FIO - 1],
+        uin: r[COL_UIN - 1],
+        stupen: r[COL_STUPEN - 1],
+        pol: r[COL_POL - 1],
+        present: isChecked(raw[i][0]),
+        klass: String(r[COL_CLASS - 1] || '').trim(),
+        letter: String(r[COL_LETTER - 1] || '').trim(),
+        res: r.slice(COL_RES_FIRST - 1, COL_RES_LAST)
+      });
+    }
+  }
+  return { ok: true, disciplines: disciplines, data: data, updated: new Date().toISOString() };
+}
+
+function columnLetter(c) {
+  var s = '';
+  while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; }
+  return s;
 }
 
 function getSheet() {
