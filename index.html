@@ -435,7 +435,10 @@
     var req = fetch(url, opts).then(function (r) {
       return r.text().then(function (t) {
         try { return JSON.parse(t); } catch (e) {
-          throw new Error('скрипт ответил не данными, а страницей (HTTP ' + r.status + ')' + googleErrorText(t));
+          var err = new Error('скрипт ответил не данными, а страницей (HTTP ' + r.status + ')' + googleErrorText(t));
+          // Скрипт вообще не запускался — записи точно нет, перепроверять незачем
+          if (/Script function not found|Authorization is required|Требуется авторизация/i.test(t)) err.definite = true;
+          throw err;
         }
       });
     });
@@ -471,6 +474,24 @@
     }
   }
 
+  // Ответ на запись иногда теряется (Google отдаёт 404 на перенаправлении, таймаут и т.п.),
+  // хотя сама запись в таблицу прошла. В таком случае перечитываем список и проверяем.
+  function verifyWrite(check, attempt) {
+    attempt = attempt || 1;
+    return requestJSON(scriptUrl, { cache: 'no-store' }, LOAD_TIMEOUT_MS)
+      .then(function (res) { return !!(res && res.ok && check(res.data || [])); }, function () { return false; })
+      .then(function (ok) {
+        if (ok || attempt >= 2) return ok;
+        return new Promise(function (r) { setTimeout(r, 4000); }).then(function () { return verifyWrite(check, attempt + 1); });
+      });
+  }
+
+  function scriptError(msg) {
+    var e = new Error(msg);
+    e.definite = true; // скрипт явно ответил «не сохранено» — перепроверять нечего
+    return e;
+  }
+
   function setPresent(item, value, rowEl) {
     var prev = item.present;
     item.present = value;
@@ -488,9 +509,21 @@
       body: JSON.stringify({ row: item.row, num: item.num, present: value })
     }, SAVE_TIMEOUT_MS)
       .then(function (res) {
-        if (!res || !res.ok) throw new Error((res && res.error) || 'скрипт вернул ok: false');
+        if (!res || !res.ok) throw scriptError((res && res.error) || 'скрипт вернул ok: false');
         failStreak = 0;
         okStatus();
+      })
+      .catch(function (err) {
+        if (err.definite) throw err;
+        setStatus('', 'проверяем сохранение…');
+        return verifyWrite(function (list) {
+          var r = list.filter(function (x) { return String(x.num) === String(item.num); })[0];
+          return r && !!r.present === value;
+        }).then(function (ok) {
+          if (!ok) throw err;
+          failStreak = 0;
+          okStatus();
+        });
       })
       .catch(function (err) {
         item.present = prev;
@@ -755,6 +788,17 @@
     if (dup) return showAddErr('Такой УИН уже в списке: №' + dup.num + ' ' + dup.fio + '.', addUin);
     if (!scriptUrl) return showAddErr('Нет подключения к таблице.');
 
+    function added(num) {
+      highlightNum = num != null ? String(num) : null;
+      addBusy = false;
+      closeAdd();
+      toast('Добавлен №' + (num != null ? num : '') + ' ' + fio, true);
+      // Показываем нового участника: сбрасываем фильтр и поиск
+      searchEl.value = '';
+      if (filterMode !== 'all') document.querySelector('.stat[data-filter="all"]').click();
+      resyncAfterSaves = true;
+    }
+
     addFio.value = fio;
     addBusy = true;
     addSubmit.disabled = true;
@@ -773,24 +817,26 @@
           if (/неизвестн|некорректный номер строки/i.test(msg)) {
             msg += '. Похоже, в Apps Script старая версия — обновите код и выпустите новую версию развёртывания';
           }
-          throw new Error(msg);
+          throw scriptError(msg);
         }
-        highlightNum = res.num != null ? String(res.num) : null;
-        addBusy = false;
-        closeAdd();
-        toast('Добавлен №' + (res.num != null ? res.num : '') + ' ' + fio, true);
-        // Показываем нового участника: сбрасываем фильтр и поиск
-        searchEl.value = '';
-        if (filterMode !== 'all') document.querySelector('.stat[data-filter="all"]').click();
-        resyncAfterSaves = true;
+        added(res.num);
       })
       .catch(function (err) {
-        var m = errText(err);
-        if (/не ответила/.test(m)) {
-          m += '. Строка могла добавиться — список обновится сам, проверьте его перед повтором';
-          resyncAfterSaves = true;
-        }
-        showAddErr('Не добавлено: ' + m);
+        if (err.definite) throw err;
+        // Ответ потерялся — проверяем, появилась ли строка в таблице
+        addSubmit.textContent = 'Проверяем…';
+        var found = null;
+        return verifyWrite(function (list) {
+          found = list.filter(function (d) { return uinDigits(d.uin) === uinDigits(uin); })[0] || null;
+          return !!found;
+        }).then(function (ok) {
+          if (!ok) throw err;
+          added(found.num);
+        });
+      })
+      .catch(function (err) {
+        resyncAfterSaves = true;
+        showAddErr('Не добавлено: ' + errText(err));
       })
       .then(function () {
         addBusy = false;
