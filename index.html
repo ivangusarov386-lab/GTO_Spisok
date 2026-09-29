@@ -200,7 +200,17 @@
     content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: var(--c);
   }
-  .stat .lbl { font-size: 11.5px; color: var(--muted); font-weight: 500; }
+  button.stat {
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+    transition: border-color .15s, box-shadow .15s, transform .15s;
+  }
+  button.stat:hover { border-color: color-mix(in srgb, var(--c) 45%, var(--border)); box-shadow: var(--shadow); }
+  button.stat:active { transform: scale(.98); }
+  button.stat.active {
+    border-color: var(--c);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 18%, transparent), var(--shadow-sm);
+  }
+  .stat .lbl { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; }
   .stat b { display: block; font-size: 22px; line-height: 1.15; font-weight: 600; color: var(--c); margin-top: 2px; }
   .stat.total { --c: var(--accent); }
   .stat.present { --c: var(--present); background: linear-gradient(135deg, var(--present-soft), var(--surface) 75%); }
@@ -220,6 +230,7 @@
     box-shadow: 0 0 12px color-mix(in srgb, var(--present) 60%, transparent);
     transition: width .5s cubic-bezier(.2, .8, .2, 1);
   }
+  .plbl { font-size: 11.5px; color: var(--muted); font-weight: 500; }
   .pct { font-size: 12px; font-weight: 600; color: var(--present); min-width: 38px; text-align: right; }
 
   /* ---- Поиск ---- */
@@ -480,6 +491,21 @@
   .btn.primary:hover { filter: brightness(1.05); }
   .modal .err { color: var(--danger); background: var(--danger-soft); border-radius: 9px; padding: 8px 10px; font-size: 12.5px; margin: -4px 0 12px; display: none; }
 
+  /* ---- Уведомление ---- */
+  .toast {
+    position: fixed; left: 50%; bottom: calc(20px + var(--safe-b));
+    transform: translate(-50%, 20px);
+    max-width: min(560px, calc(100% - 32px));
+    background: var(--danger); color: #fff;
+    padding: 12px 16px; border-radius: 12px;
+    font-size: 13.5px; line-height: 1.4;
+    box-shadow: var(--shadow-lg);
+    opacity: 0; pointer-events: none;
+    transition: opacity .2s, transform .2s;
+    z-index: 60;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
@@ -542,12 +568,13 @@
         </div>
       </div>
       <div class="stats">
-        <div class="stat total"><div class="lbl">Всего</div><b class="mono" id="cTotal">0</b></div>
-        <div class="stat present"><div class="lbl">Пришли</div><b class="mono" id="cPresent">0</b></div>
-        <div class="stat rest"><div class="lbl">Осталось</div><b class="mono" id="cRest">0</b></div>
+        <button type="button" class="stat total active" data-filter="all" aria-pressed="true"><span class="lbl">Всего</span><b class="mono" id="cTotal">0</b></button>
+        <button type="button" class="stat present" data-filter="present" aria-pressed="false"><span class="lbl">Пришли</span><b class="mono" id="cPresent">0</b></button>
+        <button type="button" class="stat rest" data-filter="rest" aria-pressed="false"><span class="lbl">Осталось</span><b class="mono" id="cRest">0</b></button>
       </div>
-      <div class="progress" aria-hidden="true">
-        <div class="bar"><i id="bar"></i></div>
+      <div class="progress">
+        <span class="plbl">Явка</span>
+        <div class="bar" role="progressbar" aria-label="Явка" aria-valuemin="0" aria-valuemax="100" id="barWrap"><i id="bar"></i></div>
         <span class="pct mono" id="pct">0%</span>
       </div>
       <div class="searchrow">
@@ -566,6 +593,8 @@
     </div>
   </main>
 </div>
+
+<div class="toast" id="toast" role="alert"></div>
 
 <div id="printArea">
   <div class="p-num" id="pNum"></div>
@@ -606,6 +635,30 @@
   var cPresent = document.getElementById('cPresent');
   var cRest = document.getElementById('cRest');
   var barEl = document.getElementById('bar');
+  var barWrap = document.getElementById('barWrap');
+  var toastEl = document.getElementById('toast');
+  var filterMode = 'all'; // all | present | rest
+  var toastTimer;
+
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 7000);
+  }
+  toastEl.addEventListener('click', function () { toastEl.classList.remove('show'); });
+
+  Array.prototype.forEach.call(document.querySelectorAll('.stat[data-filter]'), function (btn) {
+    btn.addEventListener('click', function () {
+      filterMode = btn.getAttribute('data-filter');
+      Array.prototype.forEach.call(document.querySelectorAll('.stat[data-filter]'), function (b) {
+        var on = b === btn;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      render();
+    });
+  });
   var pctEl = document.getElementById('pct');
   var emptyText = document.getElementById('emptyText');
 
@@ -660,6 +713,8 @@
     var pct = data.length ? Math.round(presentCount / data.length * 100) : 0;
     barEl.style.width = pct + '%';
     pctEl.textContent = pct + '%';
+    barWrap.setAttribute('aria-valuenow', pct);
+    barWrap.title = 'Пришли ' + presentCount + ' из ' + data.length;
   }
 
   // Римская ступень → число (для цвета значка)
@@ -689,6 +744,8 @@
   function render() {
     var q = searchEl.value.trim().toLowerCase();
     var filtered = data.filter(function (item) {
+      if (filterMode === 'present' && !item.present) return false;
+      if (filterMode === 'rest' && item.present) return false;
       if (!q) return true;
       return (
         String(item.num).toLowerCase().indexOf(q) !== -1 ||
@@ -699,7 +756,11 @@
 
     listEl.innerHTML = '';
     emptyMsg.hidden = filtered.length > 0;
-    emptyText.textContent = data.length && q ? 'Никого не нашли по запросу «' + searchEl.value.trim() + '»' : 'Список пуст или ещё не загружен.';
+    emptyText.textContent = !data.length ? 'Список пуст или ещё не загружен.'
+      : q ? 'Никого не нашли по запросу «' + searchEl.value.trim() + '»'
+      : filterMode === 'present' ? 'Пока никто не отмечен.'
+      : filterMode === 'rest' ? 'Все пришли!'
+      : 'Список пуст.';
 
     filtered.forEach(function (item) {
       var row = document.createElement('div');
@@ -777,19 +838,28 @@
     fetch(scriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ row: item.row, present: value })
-    }).then(function (r) { return r.json(); })
+      body: JSON.stringify({ row: item.row, num: item.num, present: value })
+    }).then(function (r) {
+        return r.text().then(function (t) {
+          try { return JSON.parse(t); } catch (e) {
+            throw new Error('скрипт ответил не JSON (HTTP ' + r.status + '). Проверьте doPost и доступ «Все» в развёртывании');
+          }
+        });
+      })
       .then(function (res) {
-        if (!res.ok) throw new Error(res.error || 'Ошибка сохранения');
+        if (!res || !res.ok) throw new Error((res && res.error) || 'скрипт вернул ok: false');
         setStatus('ok', 'подключено · ' + data.length);
       })
-      .catch(function () {
+      .catch(function (err) {
         item.present = prev;
         rowEl.classList.toggle('present', prev);
         var toggleEl = rowEl.querySelector('.toggle');
         if (toggleEl) toggleEl.checked = prev;
         updateCounts();
+        if (filterMode !== 'all') render();
         setStatus('err', 'ошибка сохранения');
+        var reason = err && err.message && err.message !== 'Failed to fetch' ? err.message : 'нет связи со скриптом';
+        toast('Не сохранено: ' + item.fio + ' — ' + reason);
       })
       .then(function () {
         pendingSaves--;
