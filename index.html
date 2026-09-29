@@ -335,11 +335,13 @@
 <script>
 (function () {
   var LS_KEY = 'gto_apps_script_url';
+  // Адрес по умолчанию; в настройках можно указать другой (пустое поле — вернуть этот)
+  var DEFAULT_URL = 'https://script.google.com/macros/s/AKfycbzUX-JIhoZRpt_FiNAZGpMI0p0bbGNarGGp6Q9y2NXflc6O9cHDYVoKJq2CPIZ5JSbR/exec';
   var REFRESH_MS = 15000;
   var data = [];
   var pendingSaves = 0; // сколько отметок ещё сохраняется
   var writeGen = 0;     // растёт при каждой записи — чтобы отбрасывать устаревшие ответы GET
-  var scriptUrl = localStorage.getItem(LS_KEY) || '';
+  var scriptUrl = localStorage.getItem(LS_KEY) || DEFAULT_URL;
 
   var listEl = document.getElementById('list');
   var emptyMsg = document.getElementById('emptyMsg');
@@ -364,9 +366,13 @@
   });
   document.getElementById('saveSettings').addEventListener('click', function () {
     var v = urlInput.value.trim();
-    if (!v) return;
+    if (v && v !== DEFAULT_URL) {
+      localStorage.setItem(LS_KEY, v);
+    } else {
+      localStorage.removeItem(LS_KEY);
+      v = DEFAULT_URL;
+    }
     scriptUrl = v;
-    localStorage.setItem(LS_KEY, v);
     overlay.hidden = true;
     loadData();
   });
