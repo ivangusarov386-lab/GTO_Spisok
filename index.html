@@ -289,6 +289,7 @@
     barEl.style.width = pct + '%';
     pctEl.textContent = pct + '%';
     barWrap.setAttribute('aria-valuenow', pct);
+    saveCache();
     barWrap.title = 'Пришли ' + presentCount + ' из ' + data.length;
   }
 
@@ -484,6 +485,31 @@
     return m;
   }
 
+  // ---- Память браузера: список показывается сразу, пока свежие данные грузятся ----
+  var CACHE_KEY = 'gto_cache_list_v1';
+  var cacheTimer = null;
+  function saveCache() {
+    clearTimeout(cacheTimer);
+    cacheTimer = setTimeout(function () {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), data: data }));
+      } catch (e) {}
+    }, 300);
+  }
+  function restoreCache() {
+    try {
+      var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      if (!c || c.url !== scriptUrl || !c.data || !c.data.length) return false;
+      data = c.data.map(function (d) {
+        // Запись в таблицу оборвалась вместе со страницей — даём повторить
+        if (d.local === 'pending') { d.local = 'failed'; d.error = 'страница была закрыта до ответа таблицы — нажмите «Повторить»'; }
+        return d;
+      });
+      render();
+      return true;
+    } catch (e) { return false; }
+  }
+
   function okStatus() { setStatus('ok', 'подключено · ' + data.length); }
 
   function afterSavesSettled() {
@@ -569,7 +595,8 @@
   // mode: undefined — первая загрузка (при ошибке открываем настройки),
   //       'manual' — кнопка «обновить», 'background' — тихое автообновление
   function loadData(mode) {
-    var background = mode === true || mode === 'background';
+    var cached = mode === 'cached'; // на экране данные из памяти — обновляем тихо, без окна ошибки
+    var background = mode === true || mode === 'background' || cached;
     var manual = mode === 'manual';
     if (!scriptUrl) {
       setStatus('', 'не подключено');
@@ -589,7 +616,7 @@
 
     var gen = writeGen;
     var url = scriptUrl;
-    var label = manual ? 'обновление' : (!background ? (initialTries ? 'повторная попытка' : 'загрузка') : '');
+    var label = manual ? 'обновление' : cached ? 'из памяти · обновление' : (!background ? (initialTries ? 'повторная попытка' : 'загрузка') : '');
     clearInterval(loadTicker);
     if (label) {
       var started = Date.now();
@@ -631,6 +658,7 @@
         var userAsked = manual || refreshBtn.classList.contains('spin');
         // Одна неудача фонового обновления — не повод пугать красным
         if (!background || userAsked || failStreak >= 2) setStatus('err', 'нет связи с таблицей');
+        if (cached && !userAsked) setStatus('err', 'нет связи · данные из памяти');
         if (!background && !userAsked && initialTries < INITIAL_RETRIES) {
           // Первая загрузка: не пугаем окном сразу — пробуем ещё раз
           initialTries++;
@@ -944,7 +972,8 @@
     document.fonts.load('700 16px "IBM Plex Mono"').catch(function () {});
   }
 
-  loadData();
+  if (restoreCache()) loadData('cached');
+  else loadData();
 })();
 </script>
 </body>

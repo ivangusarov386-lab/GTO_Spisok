@@ -430,6 +430,32 @@
     );
   }
 
+  // ---- Память браузера: таблица показывается сразу, свежие данные подтягиваются в фоне ----
+  var CACHE_KEY = 'gto_cache_results_v1';
+  var fromCache = false;
+
+  function applyData(disc, rows) {
+    disciplines = disc.map(function (d) { return { col: d.col, name: d.name }; });
+    data = rows;
+    buildFilters();
+    buildDiscChips();
+    renderStats();
+    render();
+  }
+
+  function restoreCache() {
+    try {
+      var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      if (!c || c.url !== scriptUrl || !c.disciplines || !c.data || !c.data.length) return false;
+      applyData(c.disciplines, c.data);
+      lastJSON = JSON.stringify([c.disciplines, c.data]);
+      fromCache = true;
+      setStatus('', 'из памяти · обновление…');
+      $('updated').textContent = 'Показаны сохранённые данные от ' + new Date(c.savedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + ' · обновляются…';
+      return true;
+    } catch (e) { return false; }
+  }
+
   function load(manual) {
     if (loading) return;
     loading = true;
@@ -450,18 +476,16 @@
         var json = JSON.stringify([res.disciplines, res.data]);
         setStatus('ok', 'подключено · ' + res.data.length);
         $('updated').textContent = 'Обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' · обновляется само каждые 30 с';
+        fromCache = false;
         if (json === lastJSON) return;
         lastJSON = json;
-        disciplines = res.disciplines.map(function (d) { return { col: d.col, name: d.name }; });
-        data = res.data;
-        buildFilters();
-        buildDiscChips();
-        renderStats();
-        render();
+        applyData(res.disciplines, res.data);
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), disciplines: res.disciplines, data: res.data })); } catch (e) {}
       })
       .catch(function (err) {
         failStreak++;
         if (manual || failStreak >= 2 || !data.length) setStatus('err', 'нет связи с таблицей');
+        if (fromCache && !manual) setStatus('err', 'нет связи · данные из памяти');
         if (manual || !data.length) {
           var m = err && err.message;
           if (!m || m === 'Failed to fetch' || /NetworkError|Load failed/i.test(m)) m = 'нет интернета, либо Google не пускает к скрипту (развёртывание удалено или доступ не «Все»)';
@@ -499,7 +523,8 @@
   window.addEventListener('online', function () { load(false); });
   window.addEventListener('offline', function () { setStatus('err', 'нет интернета'); });
 
-  load(true);
+  if (restoreCache()) load(false);
+  else load(true);
 })();
 </script>
 </body>
