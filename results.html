@@ -85,6 +85,18 @@
   .res td.n { color: var(--muted); font-weight: 600; width: 46px; min-width: 46px; }
   .res .fio { font-weight: 600; }
   .res .sub { display: flex; gap: 5px; margin-top: 3px; align-items: center; }
+  /* Пришедшие (отмечены на странице «Явка») — лёгкая зелёная подсветка, как там */
+  .res tbody tr.present td,
+  .res tbody tr.present td.stick,
+  .res tbody tr.present td.stick2 { background: color-mix(in srgb, var(--present-soft) 70%, var(--surface)); }
+  .res tbody tr.present td:first-child { box-shadow: inset 3px 0 0 var(--present); color: var(--present); }
+  .res tbody tr.present:hover td { background: var(--present-soft); }
+  .card.present {
+    background: linear-gradient(100deg, var(--present-soft) 0%, var(--surface) 85%);
+    border-color: color-mix(in srgb, var(--present) 45%, var(--border));
+    box-shadow: inset 3px 0 0 var(--present), var(--shadow-sm);
+  }
+  .card.present .num { background: linear-gradient(135deg, var(--present), var(--present-2)); color: var(--on-present); }
   .here-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--present); margin-left: 6px; vertical-align: middle; }
 
 
@@ -348,11 +360,11 @@
     tableEl.appendChild(thead);
     var tb = el('tbody');
     list.forEach(function (d) {
-      var tr = el('tr');
+      var tr = el('tr', isHere(d) ? 'present' : '');
       tr.appendChild(el('td', 'n stick mono', d.num));
       var who = el('td', 'l stick2');
       var f = el('div', 'fio', d.fio);
-      if (d.present) { var hd = el('span', 'here-dot'); hd.title = 'Пришёл'; f.appendChild(hd); }
+      if (isHere(d)) { var hd = el('span', 'here-dot'); hd.title = 'Пришёл'; f.appendChild(hd); }
       who.appendChild(f);
       var sub = el('div', 'sub');
       sub.appendChild(stupenChip(d)); sub.appendChild(polChip(d));
@@ -372,12 +384,12 @@
     // ---- карточки ----
     cardsEl.innerHTML = '';
     list.forEach(function (d) {
-      var c = el('div', 'card');
+      var c = el('div', 'card' + (isHere(d) ? ' present' : ''));
       var top = el('div', 'top');
       top.appendChild(el('div', 'num mono', d.num));
       var who = el('div');
       var f = el('div', 'fio', d.fio);
-      if (d.present) { var hd = el('span', 'here-dot'); hd.title = 'Пришёл'; f.appendChild(hd); }
+      if (isHere(d)) { var hd = el('span', 'here-dot'); hd.title = 'Пришёл'; f.appendChild(hd); }
       who.appendChild(f);
       var sub = el('div', 'meta');
       sub.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;align-items:center;font-size:12px;color:var(--muted)';
@@ -401,12 +413,35 @@
     });
   }
 
+  // Отметки «пришёл»: если на странице «Явка» они сохранены позже, чем загружены результаты, — берём оттуда
+  var resultsTime = 0;
+  var marks = null;
+  function refreshMarks() {
+    marks = null;
+    try {
+      var c = JSON.parse(localStorage.getItem('gto_cache_list_v1') || 'null');
+      if (!c || c.url !== scriptUrl || !c.data || !(c.savedAt > resultsTime)) return;
+      marks = {};
+      c.data.forEach(function (d) { marks[String(d.uin || '').replace(/\D/g, '') || ('#' + d.num)] = !!d.present; });
+    } catch (e) { marks = null; }
+  }
+  function isHere(d) {
+    if (marks) {
+      var k = String(d.uin || '').replace(/\D/g, '') || ('#' + d.num);
+      if (Object.prototype.hasOwnProperty.call(marks, k)) return marks[k];
+    }
+    return !!d.present;
+  }
+  window.addEventListener('storage', function (e) {
+    if (e.key === 'gto_cache_list_v1' && data.length) { refreshMarks(); renderStats(); render(); }
+  });
+
   function renderStats() {
     var withRes = data.filter(function (d) { return resCount(d) > 0; }).length;
     $('sTotal').textContent = data.length;
     $('sWith').textContent = withRes;
     $('sWithout').textContent = data.length - withRes;
-    $('sHere').textContent = data.filter(function (d) { return d.present; }).length;
+    $('sHere').textContent = data.filter(isHere).length;
   }
 
   function requestJSON(url, timeoutMs) {
@@ -441,6 +476,7 @@
   function applyData(disc, rows) {
     disciplines = disc.map(function (d) { return { col: d.col, name: d.name }; });
     data = rows;
+    refreshMarks();
     buildFilters();
     buildDiscChips();
     renderStats();
@@ -451,6 +487,7 @@
     try {
       var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
       if (!c || c.url !== scriptUrl || !c.disciplines || !c.data || !c.data.length) return false;
+      resultsTime = c.savedAt || 0;
       applyData(c.disciplines, c.data);
       lastJSON = JSON.stringify([c.disciplines, c.data]);
       fromCache = true;
@@ -481,7 +518,8 @@
         setStatus('ok', 'подключено · ' + res.data.length);
         $('updated').textContent = 'Обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' · обновляется само каждые 30 с';
         fromCache = false;
-        if (json === lastJSON) return;
+        resultsTime = Date.now();
+        if (json === lastJSON) { refreshMarks(); renderStats(); render(); return; }
         lastJSON = json;
         applyData(res.disciplines, res.data);
         try { localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), disciplines: res.disciplines, data: res.data })); } catch (e) {}
