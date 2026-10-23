@@ -79,17 +79,21 @@
             <a href="index.html" aria-current="page">Явка</a>
             <a href="results.html">Результаты</a>
           </nav>
-          <span class="evpill" id="evPill" hidden></span>
         </div>
         <div class="hright">
           <div class="status" title="Связь с таблицей"><span class="dot" id="dot"></span><span class="stxt" id="statusText">не подключено</span></div>
           <button class="iconbtn" id="refreshBtn" title="Обновить подключение" aria-label="Обновить подключение">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
           </button>
-          <button class="iconbtn" id="settingsBtn" title="Настройки" aria-label="Настройки">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </button>
         </div>
+      </div>
+      <div class="datebar">
+        <svg class="dico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        <select id="evSelect" class="evsel" aria-label="Дата соревнований" title="Дата соревнований из «Регистрации ГТО»"><option value="">дата: загрузка…</option></select>
+        <button type="button" class="btn primary evload" id="evLoad" hidden title="Загрузить участников выбранной даты (текущий протокол уйдёт в архив)">Загрузить</button>
+        <button type="button" class="iconbtn" id="evAppend" title="Догрузить новых участников этой даты из регистрации" aria-label="Догрузить новых участников из регистрации">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+        </button>
       </div>
       <div class="stats">
         <button type="button" class="stat total active" data-filter="all" aria-pressed="true"><span class="lbl">Всего</span><b class="mono" id="cTotal">0</b></button>
@@ -170,19 +174,9 @@
 
 <div class="overlay" id="settingsOverlay" hidden>
   <div class="modal">
-    <h2>Дата соревнований</h2>
-    <p>Сейчас загружено: <b id="evCur">—</b></p>
-    <select id="evSelect" class="evsel" aria-label="Дата из регистрации"><option value="">загрузка списка дат…</option></select>
-    <div class="evbtns">
-      <button type="button" class="btn primary" id="evLoad">Загрузить</button>
-      <button type="button" class="btn" id="evAppend">Догрузить новых</button>
-    </div>
-    <p class="hint"><b>Загрузить</b> — копия протокола сохранится в архив на Google Диске, затем «Список», явка и результаты очистятся и загрузятся участники выбранной даты из «Регистрации ГТО».<br><b>Догрузить новых</b> — добавит только тех, кого ещё нет в списке (по УИН), ничего не очищая.</p>
-    <div class="err" id="evErr"></div>
 
     <!-- Раздел подключения показывается только при ошибке связи с таблицей -->
     <div id="connSection" hidden>
-    <div class="sep"></div>
     <h2>Подключение к таблице</h2>
     <p>Вставь URL веб-приложения Apps Script (заканчивается на <code>/exec</code>), развёрнутого в таблице «протокол главный».</p>
     <input type="text" id="urlInput" placeholder="https://script.google.com/macros/s/.../exec">
@@ -259,13 +253,6 @@
     this.href = u;
   });
 
-  document.getElementById('settingsBtn').addEventListener('click', function () {
-    urlInput.value = scriptUrl;
-    urlErr.style.display = 'none';
-    showConnSection(false);
-    overlay.hidden = false;
-    loadDates();
-  });
   document.getElementById('closeSettings').addEventListener('click', function () {
     overlay.hidden = true;
   });
@@ -539,52 +526,68 @@
 
   // ---- Дата соревнований (какой лист «Регистрации ГТО» загружен в протокол) ----
   var LOAD_DATE_TIMEOUT_MS = 240000; // архивная копия протокола делается не мгновенно
-  var evPill = document.getElementById('evPill');
-  var evCur = document.getElementById('evCur');
   var evSelect = document.getElementById('evSelect');
-  var evErr = document.getElementById('evErr');
   var evLoadBtn = document.getElementById('evLoad');
   var evAppendBtn = document.getElementById('evAppend');
   var currentEventName = '';
 
   function showEvent(name) {
     currentEventName = name || '';
-    evPill.textContent = currentEventName;
-    evPill.title = 'Загружена дата: ' + currentEventName;
-    evPill.hidden = !currentEventName;
-    evCur.textContent = currentEventName || '—';
+    var has = false;
+    Array.prototype.forEach.call(evSelect.options, function (o) {
+      if (!o.value) return;
+      o.textContent = o.getAttribute('data-label') + (o.value === currentEventName ? ' ✓' : '');
+      if (o.value === currentEventName) has = true;
+    });
+    if (has) evSelect.value = currentEventName;
+    updateDateButtons();
   }
 
-  function eventError(msg) {
-    evErr.textContent = msg;
-    evErr.style.display = msg ? 'block' : 'none';
+  // «Загрузить» — только когда выбрана другая дата; «Догрузить новых» — для текущей
+  function updateDateButtons() {
+    var v = evSelect.value;
+    evLoadBtn.hidden = !v || v === currentEventName;
+    evAppendBtn.disabled = !v || v !== currentEventName;
+    evSelect.classList.toggle('changed', !evLoadBtn.hidden);
   }
+  evSelect.addEventListener('change', updateDateButtons);
+
+  function eventError(msg) { if (msg) toast(msg); }
 
   function datesUrl() { return scriptUrl + (scriptUrl.indexOf('?') === -1 ? '?' : '&') + 'view=dates'; }
 
   function loadDates() {
-    eventError('');
-    evSelect.innerHTML = '<option value="">загрузка списка дат…</option>';
-    evLoadBtn.disabled = evAppendBtn.disabled = true;
+    if (!evSelect.options.length || !evSelect.options[0].value) evSelect.innerHTML = '<option value="">дата: загрузка…</option>';
     requestJSON(datesUrl(), { cache: 'no-store' }, LOAD_TIMEOUT_MS)
       .then(function (res) {
         if (!res || !res.ok) throw new Error((res && res.error) || 'скрипт вернул ошибку');
         if (!res.dates) throw new Error('скрипт в таблице старой версии — обновите код Apps Script и выпустите новую версию развёртывания');
-        showEvent(res.current);
+        var keep = evSelect.value;
         evSelect.innerHTML = '';
+        if (!res.current) {
+          var none = document.createElement('option');
+          none.value = ''; none.textContent = 'выберите дату'; none.setAttribute('data-label', '');
+          evSelect.appendChild(none);
+        }
         res.dates.forEach(function (d) {
           var o = document.createElement('option');
           o.value = d.name;
-          o.textContent = d.name + ' — ' + d.count + ' чел.' + (d.name === res.current ? ' (загружено)' : '');
-          if (d.name === res.current) o.selected = true;
+          o.setAttribute('data-label', d.name + ' — ' + d.count + ' чел.');
+          o.textContent = o.getAttribute('data-label');
           evSelect.appendChild(o);
         });
-        if (!res.dates.length) evSelect.innerHTML = '<option value="">в регистрации нет листов с участниками</option>';
-        evLoadBtn.disabled = evAppendBtn.disabled = !res.dates.length;
+        if (!res.dates.length) evSelect.innerHTML = '<option value="">в регистрации нет дат</option>';
+        showEvent(res.current);
+        // не сбиваем выбор, если пользователь уже выбрал другую дату
+        if (keep && keep !== res.current && res.dates.some(function (d) { return d.name === keep; })) evSelect.value = keep;
+        updateDateButtons();
+        evSelect.title = 'Дата соревнований из «Регистрации ГТО»';
       })
       .catch(function (err) {
-        evSelect.innerHTML = '<option value="">не удалось получить даты</option>';
-        eventError('Не удалось получить список дат: ' + errText(err));
+        if (evSelect.options.length && evSelect.options[0].value) return; // список уже есть — оставляем
+        evSelect.innerHTML = '<option value="">дата: ' + (/старой версии/.test(errText(err)) ? 'обновите скрипт' : 'нет связи') + '</option>';
+        evSelect.title = 'Не удалось получить список дат: ' + errText(err);
+        updateDateButtons();
       });
   }
 
@@ -594,12 +597,15 @@
     if (mode === 'replace' && !window.confirm(
       'Загрузить «' + name + '»?\n\nТекущий протокол будет сохранён копией в архив на Google Диске, ' +
       'затем «Список», явка и результаты очистятся и загрузятся участники этой даты.')) return;
-    eventError('');
-    var btn = mode === 'replace' ? evLoadBtn : evAppendBtn;
-    var label = btn.textContent, started = Date.now();
-    evLoadBtn.disabled = evAppendBtn.disabled = true;
-    btn.textContent = 'Загружаем…';
-    var tick = setInterval(function () { btn.textContent = 'Загружаем… ' + Math.round((Date.now() - started) / 1000) + ' с'; }, 1000);
+    var started = Date.now();
+    evLoadBtn.disabled = evAppendBtn.disabled = evSelect.disabled = true;
+    if (mode === 'replace') evLoadBtn.textContent = 'Загружаем…';
+    else evAppendBtn.classList.add('spin');
+    var tick = setInterval(function () {
+      var sec = Math.round((Date.now() - started) / 1000);
+      if (mode === 'replace') evLoadBtn.textContent = 'Загружаем… ' + sec + ' с';
+      setStatus('', (mode === 'replace' ? 'загрузка даты' : 'догружаем новых') + '… ' + sec + ' с');
+    }, 1000);
     pendingSaves++;
     writeGen++;
     requestJSON(scriptUrl, {
@@ -632,7 +638,6 @@
           toast('«' + name + '»: добавлено ' + res.added + ', уже были в списке ' + res.skipped, true);
         }
         showEvent(res.event || name);
-        overlay.hidden = true;
         resyncAfterSaves = true;
       })
       .catch(function (err) {
@@ -640,8 +645,12 @@
       })
       .then(function () {
         clearInterval(tick);
-        btn.textContent = label;
-        evLoadBtn.disabled = evAppendBtn.disabled = false;
+        okStatus();
+        evLoadBtn.textContent = 'Загрузить';
+        evAppendBtn.classList.remove('spin');
+        evLoadBtn.disabled = evSelect.disabled = false;
+        updateDateButtons();
+        loadDates();
         pendingSaves--;
         writeGen++;
         afterSavesSettled();
@@ -826,7 +835,7 @@
       });
   }
 
-  refreshBtn.addEventListener('click', function () { loadData('manual'); });
+  refreshBtn.addEventListener('click', function () { loadData('manual'); loadDates(); });
 
   // ---------- Добавление участника ----------
   var addOverlay = document.getElementById('addOverlay');
@@ -1117,6 +1126,7 @@
 
   if (restoreCache()) loadData('cached');
   else loadData();
+  loadDates();
 })();
 </script>
 </body>

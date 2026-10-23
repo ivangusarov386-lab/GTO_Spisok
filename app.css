@@ -619,3 +619,20 @@
   .modal .evsel:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
   .modal .evbtns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
   .btn[hidden], #connSection[hidden] { display: none; }
+
+  /* ---- Выбор даты на главном экране ---- */
+  .datebar { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .datebar .dico { color: var(--warn); flex: none; }
+  .datebar .evsel {
+    flex: 1; min-width: 0; height: 40px; padding: 0 12px;
+    border-radius: 11px; border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--border));
+    background: var(--warn-soft); color: var(--ink);
+    font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    text-overflow: ellipsis;
+  }
+  .datebar .evsel:focus { outline: none; border-color: var(--warn); box-shadow: 0 0 0 4px var(--warn-soft); }
+  .datebar .evsel.changed { background: var(--surface); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .datebar .evload { height: 40px; padding: 0 14px; flex: none; }
+  .datebar .iconbtn { width: 40px; height: 40px; }
+  .datebar .iconbtn:disabled { opacity: .4; cursor: default; }
+  #evAppend.spin svg { animation: spin .8s linear infinite; }
