@@ -265,14 +265,40 @@ function hasParticipants(sheet) {
   return sheet.getRange(2, COL_FIO, last - 1, 1).getValues().some(function (r) { return String(r[0]).trim() !== ''; });
 }
 
-// Полная копия протокола в ту же папку Google Диска
+// Архив протокола перед загрузкой новой даты.
+// Основной способ — полная копия файла в ту же папку Диска (нужно разрешение на Google Диск).
+// Если такого разрешения нет — новая таблица в «Моём диске» с содержимым всех листов (как оно видно).
 function archiveCopy(ss) {
-  var file = DriveApp.getFileById(ss.getId());
   var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
   var nm = ss.getName() + ' — архив «' + (currentEvent() || 'без даты') + '» (' + stamp + ')';
-  var parents = file.getParents();
-  var copy = parents.hasNext() ? file.makeCopy(nm, parents.next()) : file.makeCopy(nm);
-  return { name: nm, url: copy.getUrl() };
+  try {
+    var file = DriveApp.getFileById(ss.getId());
+    var parents = file.getParents();
+    var copy = parents.hasNext() ? file.makeCopy(nm, parents.next()) : file.makeCopy(nm);
+    return { name: nm, url: copy.getUrl(), full: true };
+  } catch (e) {
+    return archiveValues(ss, nm);
+  }
+}
+
+function archiveValues(ss, nm) {
+  var arch = SpreadsheetApp.create(nm);
+  var tmp = arch.getSheets()[0];
+  tmp.setName('__tmp__' + new Date().getTime());
+  ss.getSheets().forEach(function (sh, i) {
+    var t = arch.insertSheet(sh.getName(), i);
+    var lr = sh.getLastRow(), lc = sh.getLastColumn();
+    if (lr < 1 || lc < 1) return;
+    if (t.getMaxColumns() < lc) t.insertColumnsAfter(t.getMaxColumns(), lc - t.getMaxColumns());
+    if (t.getMaxRows() < lr) t.insertRowsAfter(t.getMaxRows(), lr - t.getMaxRows());
+    var vals = sh.getRange(1, 1, lr, lc).getDisplayValues().map(function (row) {
+      // текст, начинающийся с «=», не должен стать формулой
+      return row.map(function (v) { return /^[=+]/.test(v) ? "'" + v : v; });
+    });
+    t.getRange(1, 1, lr, lc).setNumberFormat('@').setValues(vals);
+  });
+  arch.deleteSheet(tmp);
+  return { name: nm, url: arch.getUrl(), full: false };
 }
 
 // Очищает введённые значения, не трогая формулы

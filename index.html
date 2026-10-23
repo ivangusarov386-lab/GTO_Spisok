@@ -633,7 +633,7 @@
           searchEl.value = '';
           render();
           toast('Загружена дата «' + name + '»' + (res.loaded != null ? ': ' + res.loaded + ' участников' : '') +
-            (res.archive ? '. Прежний протокол — в архиве: «' + res.archive.name + '»' : ''), true);
+            (res.archive ? '. Прежний протокол — в архиве' + (res.archive.full === false ? ' (Google Диск → «Мой диск»)' : ' (в той же папке Диска)') + ': «' + res.archive.name + '»' : ''), true);
         } else {
           toast('«' + name + '»: добавлено ' + res.added + ', уже были в списке ' + res.skipped, true);
         }
