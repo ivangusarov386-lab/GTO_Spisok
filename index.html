@@ -325,6 +325,8 @@
     return el;
   }
 
+  function fioKey(d) { return String(d.fio || '').toLowerCase().replace(/ё/g, 'е'); }
+
   function render() {
     var q = searchEl.value.trim().toLowerCase();
     var filtered = data.filter(function (item) {
@@ -337,6 +339,8 @@
         String(item.uin).toLowerCase().indexOf(q) !== -1
       );
     });
+    // По алфавиту — и догруженные позже участники встают на своё место
+    filtered.sort(function (a, b) { return fioKey(a) < fioKey(b) ? -1 : fioKey(a) > fioKey(b) ? 1 : 0; });
 
     listEl.innerHTML = '';
     emptyMsg.hidden = filtered.length > 0;

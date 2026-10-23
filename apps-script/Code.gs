@@ -234,6 +234,7 @@ function loadDate(name, mode) {
   var people = readRegistration(src);
   if (!people.length) return { ok: false, error: 'на листе «' + name + '» нет участников' };
   var sheet = getSheet();
+  sortByFio(people);
 
   if (mode === 'append') {
     var res = appendPeople(sheet, people);
@@ -241,6 +242,8 @@ function loadDate(name, mode) {
     return { ok: true, mode: 'append', added: res.added, skipped: res.skipped, event: name };
   }
 
+  // Новая дата: алфавитный порядок и сквозные номера 1, 2, 3…
+  people.forEach(function (p, i) { p.num = i + 1; });
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var archive = hasParticipants(sheet) ? archiveCopy(ss) : null;
   clearInputs(sheet, 2, 1, COL_LETTER);           // «Список»: A:S, формулы остаются
@@ -253,6 +256,15 @@ function loadDate(name, mode) {
   setControl(name, people.length, archive);
   SpreadsheetApp.flush();
   return { ok: true, mode: 'replace', loaded: people.length, archive: archive, event: name };
+}
+
+// По алфавиту, без учёта регистра («РЯЗАНОВА» и «Рязанова» рядом), ё = е
+function sortByFio(people) {
+  var key = function (p) { return p.fio.toLowerCase().replace(/ё/g, 'е'); };
+  people.sort(function (a, b) {
+    var x = key(a), y = key(b);
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
 }
 
 function normName(n) {
