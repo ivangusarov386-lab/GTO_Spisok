@@ -146,6 +146,7 @@
             <a href="index.html">Явка</a>
             <a href="results.html" aria-current="page">Результаты</a>
           </nav>
+          <span class="evpill" id="evPill" hidden></span>
         </div>
         <div class="hright">
           <div class="status" title="Связь с таблицей"><span class="dot" id="dot"></span><span class="stxt" id="statusText">загрузка…</span></div>
@@ -473,6 +474,13 @@
   var CACHE_KEY = 'gto_cache_results_v1';
   var fromCache = false;
 
+  function showEvent(name) {
+    var pill = $('evPill');
+    pill.textContent = name || '';
+    pill.title = name ? 'Загружена дата: ' + name : '';
+    pill.hidden = !name;
+  }
+
   function applyData(disc, rows) {
     disciplines = disc.map(function (d) { return { col: d.col, name: d.name }; });
     data = rows;
@@ -488,6 +496,7 @@
       var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
       if (!c || c.url !== scriptUrl || !c.disciplines || !c.data || !c.data.length) return false;
       resultsTime = c.savedAt || 0;
+      showEvent(c.event);
       applyData(c.disciplines, c.data);
       lastJSON = JSON.stringify([c.disciplines, c.data]);
       fromCache = true;
@@ -518,11 +527,12 @@
         setStatus('ok', 'подключено · ' + res.data.length);
         $('updated').textContent = 'Обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' · обновляется само каждые 30 с';
         fromCache = false;
+        showEvent(res.event);
         resultsTime = Date.now();
         if (json === lastJSON) { refreshMarks(); renderStats(); render(); return; }
         lastJSON = json;
         applyData(res.disciplines, res.data);
-        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), disciplines: res.disciplines, data: res.data })); } catch (e) {}
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), event: res.event || '', disciplines: res.disciplines, data: res.data })); } catch (e) {}
       })
       .catch(function (err) {
         failStreak++;

@@ -79,6 +79,7 @@
             <a href="index.html" aria-current="page">Явка</a>
             <a href="results.html">Результаты</a>
           </nav>
+          <span class="evpill" id="evPill" hidden></span>
         </div>
         <div class="hright">
           <div class="status" title="Связь с таблицей"><span class="dot" id="dot"></span><span class="stxt" id="statusText">не подключено</span></div>
@@ -169,6 +170,17 @@
 
 <div class="overlay" id="settingsOverlay" hidden>
   <div class="modal">
+    <h2>Дата соревнований</h2>
+    <p>Сейчас загружено: <b id="evCur">—</b></p>
+    <select id="evSelect" class="evsel" aria-label="Дата из регистрации"><option value="">загрузка списка дат…</option></select>
+    <div class="evbtns">
+      <button type="button" class="btn primary" id="evLoad">Загрузить</button>
+      <button type="button" class="btn" id="evAppend">Догрузить новых</button>
+    </div>
+    <p class="hint"><b>Загрузить</b> — копия протокола сохранится в архив на Google Диске, затем «Список», явка и результаты очистятся и загрузятся участники выбранной даты из «Регистрации ГТО».<br><b>Догрузить новых</b> — добавит только тех, кого ещё нет в списке (по УИН), ничего не очищая.</p>
+    <div class="err" id="evErr"></div>
+
+    <div class="sep"></div>
     <h2>Подключение к таблице</h2>
     <p>Вставь URL веб-приложения Apps Script (заканчивается на <code>/exec</code>), развёрнутого в таблице «протокол главный».</p>
     <input type="text" id="urlInput" placeholder="https://script.google.com/macros/s/.../exec">
@@ -244,6 +256,7 @@
     urlInput.value = scriptUrl;
     urlErr.style.display = 'none';
     overlay.hidden = false;
+    loadDates();
   });
   document.getElementById('closeSettings').addEventListener('click', function () {
     overlay.hidden = true;
@@ -497,7 +510,7 @@
     clearTimeout(cacheTimer);
     cacheTimer = setTimeout(function () {
       try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), data: data }));
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), event: currentEventName, data: data }));
       } catch (e) {}
     }, 300);
   }
@@ -505,6 +518,7 @@
     try {
       var c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
       if (!c || c.url !== scriptUrl || !c.data || !c.data.length) return false;
+      if (c.event) showEvent(c.event);
       data = c.data.map(function (d) {
         // Запись в таблицу оборвалась вместе со страницей — даём повторить
         if (d.local === 'pending') { d.local = 'failed'; d.error = 'страница была закрыта до ответа таблицы — нажмите «Повторить»'; }
@@ -514,6 +528,119 @@
       return true;
     } catch (e) { return false; }
   }
+
+  // ---- Дата соревнований (какой лист «Регистрации ГТО» загружен в протокол) ----
+  var LOAD_DATE_TIMEOUT_MS = 240000; // архивная копия протокола делается не мгновенно
+  var evPill = document.getElementById('evPill');
+  var evCur = document.getElementById('evCur');
+  var evSelect = document.getElementById('evSelect');
+  var evErr = document.getElementById('evErr');
+  var evLoadBtn = document.getElementById('evLoad');
+  var evAppendBtn = document.getElementById('evAppend');
+  var currentEventName = '';
+
+  function showEvent(name) {
+    currentEventName = name || '';
+    evPill.textContent = currentEventName;
+    evPill.title = 'Загружена дата: ' + currentEventName;
+    evPill.hidden = !currentEventName;
+    evCur.textContent = currentEventName || '—';
+  }
+
+  function eventError(msg) {
+    evErr.textContent = msg;
+    evErr.style.display = msg ? 'block' : 'none';
+  }
+
+  function datesUrl() { return scriptUrl + (scriptUrl.indexOf('?') === -1 ? '?' : '&') + 'view=dates'; }
+
+  function loadDates() {
+    eventError('');
+    evSelect.innerHTML = '<option value="">загрузка списка дат…</option>';
+    evLoadBtn.disabled = evAppendBtn.disabled = true;
+    requestJSON(datesUrl(), { cache: 'no-store' }, LOAD_TIMEOUT_MS)
+      .then(function (res) {
+        if (!res || !res.ok) throw new Error((res && res.error) || 'скрипт вернул ошибку');
+        if (!res.dates) throw new Error('скрипт в таблице старой версии — обновите код Apps Script и выпустите новую версию развёртывания');
+        showEvent(res.current);
+        evSelect.innerHTML = '';
+        res.dates.forEach(function (d) {
+          var o = document.createElement('option');
+          o.value = d.name;
+          o.textContent = d.name + ' — ' + d.count + ' чел.' + (d.name === res.current ? ' (загружено)' : '');
+          if (d.name === res.current) o.selected = true;
+          evSelect.appendChild(o);
+        });
+        if (!res.dates.length) evSelect.innerHTML = '<option value="">в регистрации нет листов с участниками</option>';
+        evLoadBtn.disabled = evAppendBtn.disabled = !res.dates.length;
+      })
+      .catch(function (err) {
+        evSelect.innerHTML = '<option value="">не удалось получить даты</option>';
+        eventError('Не удалось получить список дат: ' + errText(err));
+      });
+  }
+
+  function loadEvent(mode) {
+    var name = evSelect.value;
+    if (!name) return;
+    if (mode === 'replace' && !window.confirm(
+      'Загрузить «' + name + '»?\n\nТекущий протокол будет сохранён копией в архив на Google Диске, ' +
+      'затем «Список», явка и результаты очистятся и загрузятся участники этой даты.')) return;
+    eventError('');
+    var btn = mode === 'replace' ? evLoadBtn : evAppendBtn;
+    var label = btn.textContent, started = Date.now();
+    evLoadBtn.disabled = evAppendBtn.disabled = true;
+    btn.textContent = 'Загружаем…';
+    var tick = setInterval(function () { btn.textContent = 'Загружаем… ' + Math.round((Date.now() - started) / 1000) + ' с'; }, 1000);
+    pendingSaves++;
+    writeGen++;
+    requestJSON(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'loadDate', sheet: name, mode: mode })
+    }, LOAD_DATE_TIMEOUT_MS)
+      .then(function (res) {
+        if (!res || !res.ok) throw scriptError((res && res.error) || 'скрипт вернул ok: false');
+        return res;
+      })
+      .catch(function (err) {
+        if (err.definite || mode !== 'replace') throw err;
+        // Ответ потерялся — проверяем, какая дата теперь загружена
+        return requestJSON(datesUrl(), { cache: 'no-store' }, LOAD_TIMEOUT_MS).then(function (res) {
+          if (res && res.ok && res.current === name) return { ok: true, mode: 'replace', event: name };
+          throw err;
+        }, function () { throw err; });
+      })
+      .then(function (res) {
+        if (mode === 'replace') {
+          // Новый список — старые данные и память браузера больше не нужны
+          data = [];
+          try { localStorage.removeItem(CACHE_KEY); localStorage.removeItem('gto_cache_results_v1'); } catch (e) {}
+          searchEl.value = '';
+          render();
+          toast('Загружена дата «' + name + '»' + (res.loaded != null ? ': ' + res.loaded + ' участников' : '') +
+            (res.archive ? '. Прежний протокол — в архиве: «' + res.archive.name + '»' : ''), true);
+        } else {
+          toast('«' + name + '»: добавлено ' + res.added + ', уже были в списке ' + res.skipped, true);
+        }
+        showEvent(res.event || name);
+        overlay.hidden = true;
+        resyncAfterSaves = true;
+      })
+      .catch(function (err) {
+        eventError('Не загружено: ' + errText(err));
+      })
+      .then(function () {
+        clearInterval(tick);
+        btn.textContent = label;
+        evLoadBtn.disabled = evAppendBtn.disabled = false;
+        pendingSaves--;
+        writeGen++;
+        afterSavesSettled();
+      });
+  }
+  evLoadBtn.addEventListener('click', function () { loadEvent('replace'); });
+  evAppendBtn.addEventListener('click', function () { loadEvent('append'); });
 
   function okStatus() { setStatus('ok', 'подключено · ' + data.length); }
 
@@ -646,6 +773,7 @@
           okStatus();
           return;
         }
+        if (res.event !== undefined) showEvent(res.event);
         var fresh = res.data || [];
         // Участники, добавленные на сайте, но ещё не записанные в таблицу, остаются в списке
         data.forEach(function (d) {
