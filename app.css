@@ -618,3 +618,4 @@
   }
   .modal .evsel:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
   .modal .evbtns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .btn[hidden], #connSection[hidden] { display: none; }
