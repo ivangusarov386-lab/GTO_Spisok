@@ -76,6 +76,15 @@
   .res td { text-align: center; font-variant-numeric: tabular-nums; }
   .res td.v { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
   .res td.v.none { color: var(--border); }
+  /* Знаки ГТО: золото — жёлтый, серебро — серый, бронза — оранжевый (как в протоколе) */
+  .lv3, .lv2, .lv1 { display: inline-block; min-width: 42px; padding: 2px 7px; border-radius: 7px; color: #1d1d1d; }
+  .lv3 { background: #FFD966; }
+  .lv2 { background: #D9D9D9; }
+  .lv1 { background: #F4B183; }
+  .card .cell .val .lv3, .card .cell .val .lv2, .card .cell .val .lv1 { min-width: 0; }
+  .lvlegend { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 10px 2px 0; }
+  .lvlegend span[class^="lv"] { font-weight: 600; min-width: 0; }
+  .lvlegend[hidden] { display: none; }
   .res tbody tr:hover td { background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface)); }
   .res tbody tr:last-child td { border-bottom: 0; }
   .res .stick { position: sticky; left: 0; z-index: 1; background: var(--surface); }
@@ -192,6 +201,9 @@
     <div class="empty" id="emptyMsg" hidden>
       <div class="ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
       <div id="emptyText">Никого не нашли.</div>
+    </div>
+    <div class="lvlegend" id="lvLegend" hidden>Знаки по нормативам ГТО:
+      <span class="lv3">золото</span><span class="lv2">серебро</span><span class="lv1">бронза</span>
     </div>
     <div class="updated" id="updated"></div>
   </main>
@@ -340,7 +352,47 @@
   }
   function valueNode(d, j) {
     var v = d.res[j];
-    return el('span', '', has(v) ? v : '—');
+    var lvl = has(v) ? badgeLevel(d, j) : 0;
+    var node = el('span', lvl ? 'lv' + lvl : '', has(v) ? v : '—');
+    if (lvl) node.title = ['', 'Бронза', 'Серебро', 'Золото'][lvl];
+    return node;
+  }
+
+  // ---- Знаки ГТО: пороги с листа «Нормативы» протокола (ступень + пол + столбец) ----
+  var norms = {};
+  function setNorms(list) {
+    norms = {};
+    (list || []).forEach(function (n) { norms[n.key] = n; });
+    var leg = $('lvLegend');
+    if (leg) leg.hidden = !Object.keys(norms).length;
+  }
+  function num(v) {
+    if (v === '' || v === null || v === undefined) return null;
+    var n = typeof v === 'number' ? v : parseFloat(String(v).trim().replace(',', '.'));
+    return isNaN(n) ? null : n;
+  }
+  // В единицах сравнения: «мин:сек» — секунды (12,14 → 12 мин 14 с; 5,3 → 5 мин 30 с)
+  function compareValue(v, fmt) {
+    if (fmt === 'мин:сек') {
+      var t = String(v).trim(), mm = t.match(/^(\d+):(\d{1,2})/);
+      if (mm) return +mm[1] * 60 + +mm[2];
+      var x = num(t);
+      if (x === null) return null;
+      var m = Math.floor(x);
+      return m * 60 + Math.round((x - m) * 100);
+    }
+    return num(v);
+  }
+  function badgeLevel(d, j) {
+    var st = (String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase();
+    var key = st + '|' + String(d.pol || '').trim().toLowerCase() + '|' + String(disciplines[j].name || '').trim().toLowerCase();
+    var n = norms[key];
+    if (!n) return 0;
+    var v = compareValue(d.res[j], n.fmt);
+    if (v === null) return 0;
+    var b = num(n.b), s = num(n.s), g = num(n.g), up = n.dir === 'больше';
+    var ok = function (t) { return t !== null && (up ? v >= t : v <= t); };
+    return ok(g) ? 3 : ok(s) ? 2 : ok(b) ? 1 : 0;
   }
 
   function render() {
@@ -500,8 +552,9 @@
       if (!c || c.url !== scriptUrl || !c.disciplines || !c.data || !c.data.length) return false;
       resultsTime = c.savedAt || 0;
       showEvent(c.event);
+      setNorms(c.norms);
       applyData(c.disciplines, c.data);
-      lastJSON = JSON.stringify([c.disciplines, c.data]);
+      lastJSON = JSON.stringify([c.disciplines, c.data, c.norms || []]);
       fromCache = true;
       setStatus('', 'из памяти · обновление…');
       $('updated').textContent = 'Показаны сохранённые данные от ' + new Date(c.savedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + ' · обновляются…';
@@ -526,7 +579,7 @@
           return;
         }
         notice.hidden = true;
-        var json = JSON.stringify([res.disciplines, res.data]);
+        var json = JSON.stringify([res.disciplines, res.data, res.norms || []]);
         setStatus('ok', 'подключено · ' + res.data.length);
         $('updated').textContent = 'Обновлено ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' · обновляется само каждые 30 с';
         fromCache = false;
@@ -534,8 +587,9 @@
         resultsTime = Date.now();
         if (json === lastJSON) { refreshMarks(); renderStats(); render(); return; }
         lastJSON = json;
+        setNorms(res.norms);
         applyData(res.disciplines, res.data);
-        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), event: res.event || '', disciplines: res.disciplines, data: res.data })); } catch (e) {}
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ url: scriptUrl, savedAt: Date.now(), event: res.event || '', disciplines: res.disciplines, data: res.data, norms: res.norms || [] })); } catch (e) {}
       })
       .catch(function (err) {
         failStreak++;

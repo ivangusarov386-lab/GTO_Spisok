@@ -1,4 +1,4 @@
-// ===== НАЧАЛО ФАЙЛА. Вставляйте весь файл целиком (около 440 строк), до метки «КОНЕЦ ФАЙЛА». =====
+// ===== НАЧАЛО ФАЙЛА. Вставляйте весь файл целиком (около 640 строк), до метки «КОНЕЦ ФАЙЛА». =====
 // Apps Script для таблицы «протокол главный».
 // Развёртывание: Развернуть → Управление развёртываниями → ✏️ → Версия: «Новая версия» → Развернуть.
 // Доступ: «Выполнять от имени: Я», «У кого есть доступ: Все».
@@ -178,7 +178,9 @@ function getResults() {
       });
     }
   }
-  return { ok: true, disciplines: disciplines, data: data, event: currentEvent(), updated: new Date().toISOString() };
+  var norms = [];
+  try { norms = getNorms(); } catch (e) {}
+  return { ok: true, disciplines: disciplines, data: data, norms: norms, event: currentEvent(), updated: new Date().toISOString() };
 }
 
 function columnLetter(c) {
@@ -253,6 +255,7 @@ function loadDate(name, mode) {
     if (lastCol >= 2) clearInputs(sh, 2, 2, lastCol); // столбец A с номерами не трогаем
   });
   writePeople(sheet, people, 2);
+  try { ensureBadges(); } catch (e) {}
   setControl(name, people.length, archive);
   SpreadsheetApp.flush();
   return { ok: true, mode: 'replace', loaded: people.length, archive: archive, event: name };
@@ -394,6 +397,194 @@ function setControl(name, count, archive) {
   if (archive) sh.getRange(4, 1, 1, 2).setValues([['Архив предыдущей', '=HYPERLINK("' + archive.url + '","' + archive.name.replace(/"/g, "'") + '")']]);
 }
 
+// ===================== Подсветка знаков ГТО (золото / серебро / бронза) =====================
+// Лист «Нормативы»: пороги по ступени, полу и столбцу протокола. Служебный скрытый лист «_знаки»
+// считает уровень каждой ячейки результатов (0–3), условное форматирование «Списка» красит ячейку.
+
+var NORMS_SHEET = 'Нормативы';
+var BADGE_SHEET = '_знаки';
+var BADGE_COLORS = { 3: '#FFD966', 2: '#D9D9D9', 1: '#F4B183' }; // золото, серебро, бронза
+var NORMS_HEAD = ['Ступень', 'Пол', 'Столбец протокола', 'Испытание', 'Лучше', 'Формат',
+                  'Бронза', 'Серебро', 'Золото', 'ключ (служебное)', 'бронза, число', 'серебро, число', 'золото, число'];
+
+// III ступень (10–11 лет), таблица Мосгорспорта. [столбец, испытание М, испытание Ж, лучше, формат, М: б/с/з, Ж: б/с/з]
+var NORMS_III = [
+  ['30м', 'Бег 30 м (с)', 'Бег 30 м (с)', 'меньше', 'сек', [6.3, 5.9, 5.3], [6.5, 6.1, 5.5]],
+  ['длинная', 'Бег на 1000 м (мин:с)', 'Бег на 1000 м (мин:с)', 'меньше', 'мин:сек', ['6:20', '5:41', '4:42'], ['6:40', '6:12', '5:03']],
+  ['подтягивание', 'Подтягивание из виса на высокой перекладине', 'Подтягивание из виса лёжа на низкой перекладине 90 см', 'больше', 'число', [2, 4, 6], [7, 10, 16]],
+  ['отжимание', 'Сгибание и разгибание рук в упоре лёжа на полу', 'Сгибание и разгибание рук в упоре лёжа на полу', 'больше', 'число', [10, 13, 22], [5, 7, 13]],
+  ['наклон', 'Наклон вперёд стоя на скамье (см)', 'Наклон вперёд стоя на скамье (см)', 'больше', 'число', [2, 4, 8], [3, 5, 11]],
+  ['челнок', 'Челночный бег 3×10 м (с)', 'Челночный бег 3×10 м (с)', 'меньше', 'сек', [9.7, 9.2, 8.4], [10.1, 9.4, 8.6]],
+  ['прыжки', 'Прыжок в длину с места (см)', 'Прыжок в длину с места (см)', 'больше', 'число', [128, 142, 162], [118, 132, 152]],
+  ['пресс', 'Поднимание туловища за 1 мин (раз)', 'Поднимание туловища за 1 мин (раз)', 'больше', 'число', [26, 33, 43], [23, 28, 37]],
+  ['метание', 'Метание мяча 150 г (м)', 'Метание мяча 150 г (м)', 'больше', 'число', [18, 22, 28], [12, 15, 20]]
+];
+
+function normKeyPart(v) { return String(v == null ? '' : v).trim().toLowerCase(); }
+
+// Число результата/порога в единицах сравнения. «мин:сек»: «6:20» → 380 с, 12,14 → 12 мин 14 с = 734 с
+function normValue(v, fmt) {
+  if (v === '' || v === null || v === undefined) return '';
+  if (fmt === 'мин:сек') {
+    if (v instanceof Date) return v.getHours() * 60 + v.getMinutes(); // «6:20», распознанное как время
+    var t = String(v).trim();
+    var mm = t.match(/^(\d+):(\d{1,2})/);
+    if (mm) return +mm[1] * 60 + +mm[2];
+    var x = parseFloat(t.replace(',', '.'));
+    if (isNaN(x)) return '';
+    var m = Math.floor(x);
+    return m * 60 + Math.round((x - m) * 100);
+  }
+  var n = typeof v === 'number' ? v : parseFloat(String(v).trim().replace(',', '.'));
+  return isNaN(n) ? '' : n;
+}
+
+// Заголовок «Списка», соответствующий столбцу норматива («длинная» может называться «длинная (1000 м)»)
+function findListHeader(headers, name) {
+  var want = normKeyPart(name);
+  for (var i = 0; i < headers.length; i++) {
+    var h = normKeyPart(headers[i]);
+    if (h && (h === want || h.indexOf(want) === 0)) return String(headers[i]).trim();
+  }
+  return name;
+}
+
+function createNormsSheet(ss, list) {
+  var sh = ss.insertSheet(NORMS_SHEET);
+  var headers = list.getRange(1, COL_RES_FIRST, 1, COL_RES_LAST - COL_RES_FIRST + 1).getDisplayValues()[0];
+  var rows = [];
+  NORMS_III.forEach(function (n) {
+    var col = findListHeader(headers, n[0]);
+    rows.push(['III', 'мужской', col, n[1], n[3], n[4]].concat(n[5]));
+    rows.push(['III', 'женский', col, n[2], n[3], n[4]].concat(n[6]));
+  });
+  sh.getRange(1, 1, 1, NORMS_HEAD.length).setValues([NORMS_HEAD]).setFontWeight('bold');
+  sh.getRange(2, 7, Math.max(rows.length, 1) + 200, 3).setNumberFormat('@'); // пороги — как написаны («6:20», «5,3»)
+  sh.getRange(2, 1, rows.length, 9).setValues(rows.map(function (r) {
+    return r.map(function (v) { return typeof v === 'number' ? String(v).replace('.', ',') : v; });
+  }));
+  sh.setFrozenRows(1);
+  sh.autoResizeColumns(1, 9);
+  return sh;
+}
+
+// Служебные столбцы J:M — ключ и пороги числами (пересчитываются при правке листа)
+function refreshNormNumbers(sh) {
+  var last = sh.getLastRow();
+  if (last < 2) return;
+  var vals = sh.getRange(2, 1, last - 1, 9).getValues();
+  var out = vals.map(function (r) {
+    if (String(r[0]).trim() === '') return ['', '', '', ''];
+    var fmt = normKeyPart(r[5]);
+    return [
+      String(r[0]).trim().toUpperCase() + '|' + normKeyPart(r[1]) + '|' + normKeyPart(r[2]),
+      normValue(r[6], fmt), normValue(r[7], fmt), normValue(r[8], fmt)
+    ];
+  });
+  sh.getRange(2, 10, out.length, 4).setValues(out);
+  sh.getRange(1, 10, 1, 4).setValues([NORMS_HEAD.slice(9)]).setFontColor('#999999');
+}
+
+// Служебный лист «_знаки» — четыре блока формул на каждую ячейку результатов «Списка» (F:P):
+//   F:P   — уровень 0–3 (его читает условное форматирование)
+//   V:AF  — номер строки норматива на листе «Нормативы»
+//   AH:AR — результат числом (как в ячейке)
+//   AT:BD — результат в единицах сравнения (для «мин:сек» — секунды)
+// Используются только общие функции (INDEX, MATCH, VALUE…), без LET и регулярных выражений.
+var BADGE_BLOCK = { level: 6, match: 22, num: 34, val: 46 };
+
+function badgeFormulas(r, c) {
+  var L = "'" + SHEET_NAME + "'!", N = "'" + NORMS_SHEET + "'!";
+  var off = c - COL_RES_FIRST;
+  var col = columnLetter(c);
+  var mC = columnLetter(BADGE_BLOCK.match + off) + r;
+  var xC = columnLetter(BADGE_BLOCK.num + off) + r;
+  var vC = columnLetter(BADGE_BLOCK.val + off) + r;
+  var raw = L + col + r;
+  var idx = function (nc) { return 'INDEX(' + N + '$' + nc + ':$' + nc + ',' + mC + ')'; };
+  var stupen = 'UPPER(LEFT(TRIM(' + L + '$D' + r + '),FIND(" ",TRIM(' + L + '$D' + r + ')&" ")-1))';
+  var key = stupen + '&"|"&LOWER(TRIM(' + L + '$E' + r + '))&"|"&LOWER(TRIM(' + L + col + '$1))';
+  var match = '=IF(OR(' + raw + '="",' + L + '$B' + r + '=""),"",IFERROR(MATCH(' + key + ',' + N + '$J:$J,0),""))';
+  var num = '=IF(' + mC + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),"")))))';
+  var val = '=IF(' + xC + '="","",IF(' + idx('F') + '="мин:сек",INT(' + xC + ')*60+ROUND((' + xC + '-INT(' + xC + '))*100,0),' + xC + '))';
+  var b = idx('K'), sv = idx('L'), g = idx('M');
+  var cmp = function (t, op) { return 'AND(' + t + '<>"",' + vC + op + t + ')'; };
+  var level = '=IF(' + vC + '="","",IF(' + idx('E') + '="больше",' +
+    'IF(' + cmp(g, '>=') + ',3,IF(' + cmp(sv, '>=') + ',2,IF(' + cmp(b, '>=') + ',1,0))),' +
+    'IF(' + cmp(g, '<=') + ',3,IF(' + cmp(sv, '<=') + ',2,IF(' + cmp(b, '<=') + ',1,0)))))';
+  return { level: level, match: match, num: num, val: val };
+}
+
+function setupBadges() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var list = getSheet();
+  var norms = ss.getSheetByName(NORMS_SHEET) || createNormsSheet(ss, list);
+  refreshNormNumbers(norms);
+
+  var rows = list.getMaxRows();
+  var width = COL_RES_LAST - COL_RES_FIRST + 1;
+  var needCols = BADGE_BLOCK.val + width - 1;
+  var helper = ss.getSheetByName(BADGE_SHEET) || ss.insertSheet(BADGE_SHEET);
+  if (helper.getMaxRows() < rows) helper.insertRowsAfter(helper.getMaxRows(), rows - helper.getMaxRows());
+  if (helper.getMaxColumns() < needCols) helper.insertColumnsAfter(helper.getMaxColumns(), needCols - helper.getMaxColumns());
+  helper.getRange(1, 1).setValue('Служебный лист: уровень знака для ячеек «Списка» (3 — золото, 2 — серебро, 1 — бронза). Не редактировать.');
+  var blocks = { level: [], match: [], num: [], val: [] };
+  for (var r = 2; r <= rows; r++) {
+    var rowF = { level: [], match: [], num: [], val: [] };
+    for (var c = COL_RES_FIRST; c <= COL_RES_LAST; c++) {
+      var f = badgeFormulas(r, c);
+      rowF.level.push(f.level); rowF.match.push(f.match); rowF.num.push(f.num); rowF.val.push(f.val);
+    }
+    Object.keys(blocks).forEach(function (k) { blocks[k].push(rowF[k]); });
+  }
+  Object.keys(blocks).forEach(function (k) {
+    helper.getRange(2, BADGE_BLOCK[k], rows - 1, width).setFormulas(blocks[k]);
+  });
+  helper.hideSheet();
+
+  // Условное форматирование: наши правила — первыми, чужие правила сохраняем
+  var range = list.getRange(2, COL_RES_FIRST, rows - 1, width);
+  var others = list.getConditionalFormatRules().filter(function (rule) {
+    var bc = rule.getBooleanCondition();
+    var vals = bc ? bc.getCriteriaValues() : [];
+    return !(vals.length && String(vals[0]).indexOf(BADGE_SHEET) !== -1);
+  });
+  var ours = [3, 2, 1].map(function (lvl) {
+    return SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=INDIRECT("\'' + BADGE_SHEET + '\'!"&ADDRESS(ROW(),COLUMN()))=' + lvl)
+      .setBackground(BADGE_COLORS[lvl])
+      .setRanges([range])
+      .build();
+  });
+  list.setConditionalFormatRules(ours.concat(others));
+  return { ok: true, rows: rows - 1 };
+}
+
+// Если «Список» вырос (новая дата с большим числом участников) — достраиваем подсветку
+function ensureBadges() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var helper = ss.getSheetByName(BADGE_SHEET);
+  if (helper && helper.getMaxRows() < getSheet().getMaxRows()) setupBadges();
+}
+
+// Правка листа «Нормативы» — сразу пересчитываем служебные пороги
+function onEdit(e) {
+  try {
+    if (e && e.range && e.range.getSheet().getName() === NORMS_SHEET) refreshNormNumbers(e.range.getSheet());
+  } catch (err) {}
+}
+
+// Нормативы для сайта
+function getNorms() {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(NORMS_SHEET);
+  if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, 13).getValues()
+    .filter(function (r) { return String(r[9]).trim() !== ''; })
+    .map(function (r) {
+      return { key: String(r[9]), dir: normKeyPart(r[4]), fmt: normKeyPart(r[5]), b: r[10], s: r[11], g: r[12] };
+    });
+}
+
 // ===================== Меню «ГТО» в самой таблице =====================
 
 function onOpen() {
@@ -401,7 +592,14 @@ function onOpen() {
   if (/архив/i.test(ss.getName())) return; // в архивных копиях загрузка не нужна
   SpreadsheetApp.getUi().createMenu('ГТО')
     .addItem('Загрузить дату из регистрации…', 'showLoadDialog')
+    .addItem('Подсветка знаков: создать / обновить', 'menuSetupBadges')
     .addToUi();
+}
+
+function menuSetupBadges() {
+  var res = setupBadges();
+  SpreadsheetApp.getUi().alert('Подсветка знаков настроена: строк «Списка» — ' + res.rows +
+    '.\nПороги — на листе «' + NORMS_SHEET + '», их можно править.');
 }
 
 function showLoadDialog() {
