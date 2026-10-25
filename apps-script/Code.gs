@@ -671,7 +671,7 @@ function getNorms() {
   return sh.getRange(2, 1, sh.getLastRow() - 1, 13).getValues()
     .filter(function (r) { return String(r[9]).trim() !== ''; })
     .map(function (r) {
-      return { key: String(r[9]), dir: normKeyPart(r[4]), fmt: normKeyPart(r[5]), b: r[10], s: r[11], g: r[12] };
+      return { key: String(r[9]), name: String(r[3]), dir: normKeyPart(r[4]), fmt: normKeyPart(r[5]), b: r[10], s: r[11], g: r[12] };
     });
 }
 

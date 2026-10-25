@@ -49,6 +49,7 @@
   .filters .chk { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
   .filters .chk input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
   .filters .grow { flex: 1; }
+  .filters .xls { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; }
   .count { font-size: 12.5px; color: var(--muted); align-self: center; white-space: nowrap; }
 
   /* ---- Таблица ---- */
@@ -190,6 +191,10 @@
         <label class="chk"><input type="checkbox" id="fHasRes"> только с результатами</label>
         <span class="grow"></span>
         <span class="count" id="count"></span>
+        <button class="btn xls" id="xlsBtn" title="Скачать в Excel то, что сейчас показано. Знаки пересчитываются при правке результатов">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Excel
+        </button>
       </div>
     </div>
   </header>
@@ -393,6 +398,143 @@
     var b = num(n.b), s = num(n.s), g = num(n.g), up = n.dir === 'больше';
     var ok = function (t) { return t !== null && (up ? v >= t : v <= t); };
     return ok(g) ? 3 : ok(s) ? 2 : ok(b) ? 1 : 0;
+  }
+
+  // ---- Выгрузка в Excel: результаты + лист «Нормативы»; знак считается формулами Excel ----
+  // Время в формате «мин,сек» как в протоколе: 6,20 = 6 мин 20 с. Формулы без LET и текстовых чисел —
+  // работают в Excel и LibreOffice при любой локали.
+  var EXCEL_LIB = 'vendor/exceljs/exceljs.min.js';
+  var XL_COLORS = { 3: 'FFFFD966', 2: 'FFD9D9D9', 1: 'FFF4B183' };
+  function loadExcelJS() {
+    if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = EXCEL_LIB;
+      s.onload = function () { window.ExcelJS ? resolve(window.ExcelJS) : reject(new Error('библиотека Excel не загрузилась')); };
+      s.onerror = function () { reject(new Error('библиотека Excel не загрузилась')); };
+      document.head.appendChild(s);
+    });
+  }
+  function colName(c) { var s = ''; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; } return s; }
+  function toMinSec(sec) { var m = Math.floor(sec / 60); return Math.round((m + (sec - m * 60) / 100) * 100) / 100; }
+  // Значение для ячейки Excel: числа — числами (5,3 → 5.3; «6:20» → 6.20), остальное — текстом
+  function xlValue(v) {
+    if (!has(v)) return null;
+    if (typeof v === 'number') return v;
+    var t = String(v).trim(), mm = t.match(/^(\d+):(\d{1,2})$/);
+    if (mm) return +mm[1] + +mm[2] / 100;
+    if (/^[+-]?\d+([.,]\d+)?$/.test(t)) return parseFloat(t.replace(',', '.'));
+    return t;
+  }
+  function normOf(d, j) {
+    var st = (String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase();
+    return norms[st + '|' + String(d.pol || '').trim().toLowerCase() + '|' + String(disciplines[j].name || '').trim().toLowerCase()];
+  }
+
+  function buildWorkbook(ExcelJS, list) {
+    var wb = new ExcelJS.Workbook();
+    wb.calcProperties.fullCalcOnLoad = true;
+    var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
+    var nw = wb.addWorksheet('Нормативы', { views: [{ state: 'frozen', ySplit: 1 }] });
+    var N = "'Нормативы'!";
+    var bold = { bold: true }, headFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF1F6' } };
+
+    // Лист «Нормативы»: G:I — пороги как пишут в протоколе, K:M — они же в единицах сравнения
+    nw.addRow(['Ступень', 'Пол', 'Столбец протокола', 'Испытание', 'Лучше', 'Формат', 'Бронза', 'Серебро', 'Золото',
+               'ключ (служебное)', 'бронза, число', 'серебро, число', 'золото, число']);
+    nw.getRow(1).font = bold;
+    nw.getRow(1).fill = headFill;
+    var order = disciplines.map(function (d) { return String(d.name).trim().toLowerCase(); });
+    var nlist = Object.keys(norms).map(function (k) { return norms[k]; }).sort(function (a, b) {
+      var x = a.key.split('|'), y = b.key.split('|');
+      return (romanToInt(x[0]) - romanToInt(y[0])) || (order.indexOf(x[2]) - order.indexOf(y[2])) || (x[1] < y[1] ? 1 : x[1] > y[1] ? -1 : 0);
+    });
+    var normRow = {};
+    nlist.forEach(function (n, i) {
+      var r = i + 2, p = n.key.split('|'), ms = n.fmt === 'мин:сек';
+      normRow[n.key] = r;
+      var thr = [n.b, n.s, n.g].map(function (t) { var x = num(t); return x === null ? null : ms ? toMinSec(x) : x; });
+      var row = nw.getRow(r);
+      row.values = [p[0], p[1], p[2], n.name || '', n.dir, n.fmt].concat(thr);
+      row.getCell(10).value = { formula: 'UPPER(TRIM(A' + r + '))&"|"&LOWER(TRIM(B' + r + '))&"|"&LOWER(TRIM(C' + r + '))', result: n.key };
+      ['G', 'H', 'I'].forEach(function (c, k) {
+        row.getCell(11 + k).value = { formula: 'IF(' + c + r + '="","",IF($F' + r + '="мин:сек",INT(' + c + r + ')*60+ROUND((' + c + r + '-INT(' + c + r + '))*100,0),' + c + r + '))',
+                                      result: num([n.b, n.s, n.g][k]) === null ? '' : num([n.b, n.s, n.g][k]) };
+        if (ms) row.getCell(7 + k).numFmt = '0.00';
+      });
+    });
+    [9, 9, 18, 44, 9, 9, 9, 9, 9, 24, 11, 11, 11].forEach(function (w, i) { nw.getColumn(i + 1).width = w; });
+    [10, 11, 12, 13].forEach(function (c) { nw.getColumn(c).font = { color: { argb: 'FF999999' } }; });
+    nw.addRow([]);
+    nw.addRow(['Время пишется как в протоколе: 6,20 — это 6 мин 20 с. Пороги можно править — цвета на листе «Результаты» пересчитаются.']);
+
+    // Лист «Результаты»: видимые столбцы + скрытые служебные (номер норматива и уровень знака)
+    var nd = disciplines.length, R0 = 7, M0 = R0 + nd + 1, L0 = M0 + nd;
+    var head = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс'].concat(disciplines.map(function (d) { return d.name; }));
+    ws.getRow(1).values = head;
+    ws.getRow(1).font = bold;
+    for (var c = 1; c <= head.length; c++) ws.getRow(1).getCell(c).fill = headFill;
+    for (var j = 0; j < nd; j++) { ws.getRow(1).getCell(M0 + j).value = 'служ.'; ws.getRow(1).getCell(L0 + j).value = 'служ.'; }
+    list.forEach(function (d, i) {
+      var r = i + 2, row = ws.getRow(r);
+      row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d)];
+      for (var j = 0; j < nd; j++) {
+        var n = normOf(d, j), x = colName(R0 + j) + r, m = colName(M0 + j) + r;
+        var cell = row.getCell(R0 + j);
+        cell.value = xlValue(d.res[j]);
+        if (n && n.fmt === 'мин:сек' && typeof cell.value === 'number') cell.numFmt = '0.00';
+        cell.alignment = { horizontal: 'center' };
+        row.getCell(M0 + j).value = {
+          formula: 'IFERROR(MATCH(UPPER(LEFT(TRIM($D' + r + '),FIND(" ",TRIM($D' + r + ')&" ")-1))&"|"&LOWER(TRIM($E' + r + '))&"|"&LOWER(TRIM(' + colName(R0 + j) + '$1)),' + N + '$J:$J,0),"")',
+          result: n ? normRow[n.key] : '' };
+        var V = 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",INT(' + x + ')*60+ROUND((' + x + '-INT(' + x + '))*100,0),' + x + ')';
+        var T = function (col) { return 'INDEX(' + N + '$' + col + ':$' + col + ',' + m + ')'; };
+        var cmp = function (col, op) { return 'AND(' + T(col) + '<>"",' + V + op + T(col) + ')'; };
+        var lv = function (op) { return 'IF(' + cmp('M', op) + ',3,IF(' + cmp('L', op) + ',2,IF(' + cmp('K', op) + ',1,0)))'; };
+        row.getCell(L0 + j).value = {
+          formula: 'IF(OR(' + m + '="",NOT(ISNUMBER(' + x + '))),0,IF(INDEX(' + N + '$E:$E,' + m + ')="больше",' + lv('>=') + ',' + lv('<=') + '))',
+          result: has(d.res[j]) ? badgeLevel(d, j) : 0 };
+      }
+    });
+    [6, 34, 15, 22, 10, 8].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+    for (var k = 0; k < nd; k++) {
+      ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
+      ws.getColumn(M0 + k).hidden = true;
+      ws.getColumn(L0 + k).hidden = true;
+    }
+    if (nd && list.length) {
+      var last = list.length + 1;
+      ws.addConditionalFormatting({
+        ref: colName(R0) + '2:' + colName(R0 + nd - 1) + last,
+        rules: [3, 2, 1].map(function (lvl, i) {
+          return { type: 'expression', priority: i + 1, formulae: [colName(L0) + '2=' + lvl],
+                   style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
+        })
+      });
+      ws.autoFilter = { from: 'A1', to: colName(R0 + nd - 1) + '1' };
+    }
+    return wb;
+  }
+
+  function exportExcel() {
+    var list = filtered();
+    if (!list.length) { toast('Нечего выгружать: список пуст.'); return; }
+    var btn = $('xlsBtn');
+    btn.disabled = true;
+    loadExcelJS()
+      .then(function (ExcelJS) { return buildWorkbook(ExcelJS, list).xlsx.writeBuffer(); })
+      .then(function (buf) {
+        var ev = ($('evPill').textContent || '').trim();
+        var name = ('ГТО результаты' + (ev ? ' ' + ev : '')).replace(/[\\/:*?"<>|]+/g, '-') + '.xlsx';
+        var url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        var a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+        toast('Скачано: ' + name + ' (' + list.length + ' чел.)');
+      })
+      .catch(function (err) { toast('Не получилось сделать Excel: ' + (err && err.message || err)); })
+      .then(function () { btn.disabled = false; });
   }
 
   function render() {
@@ -611,6 +753,7 @@
   fSort.addEventListener('change', function () { setSort(fSort.value); });
   searchEl.addEventListener('input', render);
   refreshBtn.addEventListener('click', function () { load(true); });
+  $('xlsBtn').addEventListener('click', exportExcel);
 
   // Как на странице явки: буквы с клавиатуры — в поиск, Delete — очистить
   document.addEventListener('keydown', function (e) {
