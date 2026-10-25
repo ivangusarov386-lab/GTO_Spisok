@@ -1,4 +1,4 @@
-// ===== НАЧАЛО ФАЙЛА. Вставляйте весь файл целиком (около 770 строк), до метки «КОНЕЦ ФАЙЛА». =====
+// ===== НАЧАЛО ФАЙЛА. Вставляйте весь файл целиком (около 760 строк), до метки «КОНЕЦ ФАЙЛА». =====
 // Apps Script для таблицы «протокол главный».
 // Развёртывание: Развернуть → Управление развёртываниями → ✏️ → Версия: «Новая версия» → Развернуть.
 // Доступ: «Выполнять от имени: Я», «У кого есть доступ: Все».
@@ -255,7 +255,8 @@ function loadDate(name, mode) {
     if (lastCol >= 2) clearInputs(sh, 2, 2, lastCol); // столбец A с номерами не трогаем
   });
   writePeople(sheet, people, 2);
-  try { ensureBadges(); } catch (e) {}
+  SpreadsheetApp.flush();
+  try { paintBadges(); } catch (e) {}
   setControl(name, people.length, archive);
   SpreadsheetApp.flush();
   return { ok: true, mode: 'replace', loaded: people.length, archive: archive, event: name };
@@ -398,11 +399,11 @@ function setControl(name, count, archive) {
 }
 
 // ===================== Подсветка знаков ГТО (золото / серебро / бронза) =====================
-// Лист «Нормативы»: пороги по ступени, полу и столбцу протокола. Служебный скрытый лист «_знаки»
-// считает уровень каждой ячейки результатов (0–3), условное форматирование «Списка» красит ячейку.
+// Лист «Нормативы»: пороги по ступени, полу и столбцу протокола. Скрипт сам красит ячейки результатов
+// «Списка» при каждой правке таблицы (paintBadges).
 
 var NORMS_SHEET = 'Нормативы';
-var BADGE_SHEET = '_знаки';
+var BADGE_SHEET = '_знаки'; // служебный лист прежней версии — удаляется при настройке
 var BADGE_COLORS = { 3: '#FFD966', 2: '#D9D9D9', 1: '#F4B183' }; // золото, серебро, бронза
 var NORMS_HEAD = ['Ступень', 'Пол', 'Столбец протокола', 'Испытание', 'Лучше', 'Формат',
                   'Бронза', 'Серебро', 'Золото', 'ключ (служебное)', 'бронза, число', 'серебро, число', 'золото, число'];
@@ -584,34 +585,52 @@ function refreshNormNumbers(sh) {
   sh.getRange(1, 10, 1, 4).setValues([NORMS_HEAD.slice(9)]).setFontColor('#999999');
 }
 
-// Служебный лист «_знаки» — четыре блока формул на каждую ячейку результатов «Списка» (F:P):
-//   F:P   — уровень 0–3 (его читает условное форматирование)
-//   V:AF  — номер строки норматива на листе «Нормативы»
-//   AH:AR — результат числом (как в ячейке)
-//   AT:BD — результат в единицах сравнения (для «мин:сек» — секунды)
-// Используются только общие функции (INDEX, MATCH, VALUE…), без LET и регулярных выражений.
-var BADGE_BLOCK = { level: 6, match: 22, num: 34, val: 46 };
-
-function badgeFormulas(r, c) {
-  var L = "'" + SHEET_NAME + "'!", N = "'" + NORMS_SHEET + "'!";
-  var off = c - COL_RES_FIRST;
-  var col = columnLetter(c);
-  var mC = columnLetter(BADGE_BLOCK.match + off) + r;
-  var xC = columnLetter(BADGE_BLOCK.num + off) + r;
-  var vC = columnLetter(BADGE_BLOCK.val + off) + r;
-  var raw = L + col + r;
-  var idx = function (nc) { return 'INDEX(' + N + '$' + nc + ':$' + nc + ',' + mC + ')'; };
-  var stupen = 'UPPER(LEFT(TRIM(' + L + '$D' + r + '),FIND(" ",TRIM(' + L + '$D' + r + ')&" ")-1))';
-  var key = stupen + '&"|"&LOWER(TRIM(' + L + '$E' + r + '))&"|"&LOWER(TRIM(' + L + col + '$1))';
-  var match = '=IF(OR(' + raw + '="",' + L + '$B' + r + '=""),"",IFERROR(MATCH(' + key + ',' + N + '$J:$J,0),""))';
-  var num = '=IF(' + mC + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),"")))))';
-  var val = '=IF(' + xC + '="","",IF(' + idx('F') + '="мин:сек",INT(' + xC + ')*60+ROUND((' + xC + '-INT(' + xC + '))*100,0),' + xC + '))';
-  var b = idx('K'), sv = idx('L'), g = idx('M');
-  var cmp = function (t, op) { return 'AND(' + t + '<>"",' + vC + op + t + ')'; };
-  var level = '=IF(' + vC + '="","",IF(' + idx('E') + '="больше",' +
-    'IF(' + cmp(g, '>=') + ',3,IF(' + cmp(sv, '>=') + ',2,IF(' + cmp(b, '>=') + ',1,0))),' +
-    'IF(' + cmp(g, '<=') + ',3,IF(' + cmp(sv, '<=') + ',2,IF(' + cmp(b, '<=') + ',1,0)))))';
-  return { level: level, match: match, num: num, val: val };
+// Цвет ставит сам скрипт (без формул и условного форматирования — они ломаются при русской локали таблицы).
+// Перекрашивает только ячейки результатов F:P; чужую заливку не трогает, снимает лишь свои три цвета.
+function paintBadges() {
+  var list = getSheet();
+  var map = {};
+  getNorms().forEach(function (n) { map[n.key] = n; });
+  var last = list.getLastRow();
+  var fio = last >= 2 ? list.getRange(2, COL_FIO, last - 1, 1).getValues() : [];
+  var people = fio.length;
+  while (people > 0 && String(fio[people - 1][0]).trim() === '') people--;
+  // строки, покрашенные в прошлый раз, тоже проходим — после загрузки короткого списка снимаем старые цвета
+  var props = PropertiesService.getDocumentProperties();
+  var n = Math.min(Math.max(people, +props.getProperty('badge_rows') || 0), list.getMaxRows() - 1);
+  if (String(people) !== props.getProperty('badge_rows')) props.setProperty('badge_rows', String(people));
+  if (n < 1) return 0;
+  var width = COL_RES_LAST - COL_RES_FIRST + 1;
+  var head = list.getRange(1, COL_RES_FIRST, 1, width).getDisplayValues()[0].map(normKeyPart);
+  var info = list.getRange(2, 1, n, 5).getValues();             // D — ступень, E — пол
+  var vals = list.getRange(2, COL_RES_FIRST, n, width).getValues();
+  var range = list.getRange(2, COL_RES_FIRST, n, width);
+  var bgs = range.getBackgrounds();
+  var ours = {};
+  Object.keys(BADGE_COLORS).forEach(function (k) { ours[BADGE_COLORS[k].toLowerCase()] = true; });
+  var num = function (t) { return typeof t === 'number' ? t : null; };
+  var changed = 0;
+  for (var r = 0; r < n; r++) {
+    if (r >= people) info[r] = ['', '', '', '', ''];            // участника уже нет — только снять свои цвета
+    var st = (String(info[r][3]).trim().split(' ')[0] || '').toUpperCase();
+    var prefix = st + '|' + normKeyPart(info[r][4]) + '|';
+    for (var c = 0; c < width; c++) {
+      var lvl = 0, nr = map[prefix + head[c]];
+      if (nr && vals[r][c] !== '') {
+        var v = normValue(vals[r][c], nr.fmt);
+        if (v !== '') {
+          var up = nr.dir === 'больше';
+          var ok = function (t) { t = num(t); return t !== null && (up ? v >= t : v <= t); };
+          lvl = ok(nr.g) ? 3 : ok(nr.s) ? 2 : ok(nr.b) ? 1 : 0;
+        }
+      }
+      var cur = String(bgs[r][c]).toLowerCase();
+      var want = lvl ? BADGE_COLORS[lvl].toLowerCase() : (ours[cur] ? '#ffffff' : cur);
+      if (want !== cur) { bgs[r][c] = want; changed++; }
+    }
+  }
+  if (changed) range.setBackgrounds(bgs);
+  return changed;
 }
 
 function setupBadges() {
@@ -621,56 +640,27 @@ function setupBadges() {
   var added = addMissingNorms(norms, list);
   refreshNormNumbers(norms);
 
-  var rows = list.getMaxRows();
-  var width = COL_RES_LAST - COL_RES_FIRST + 1;
-  var needCols = BADGE_BLOCK.val + width - 1;
-  var helper = ss.getSheetByName(BADGE_SHEET) || ss.insertSheet(BADGE_SHEET);
-  if (helper.getMaxRows() < rows) helper.insertRowsAfter(helper.getMaxRows(), rows - helper.getMaxRows());
-  if (helper.getMaxColumns() < needCols) helper.insertColumnsAfter(helper.getMaxColumns(), needCols - helper.getMaxColumns());
-  helper.getRange(1, 1).setValue('Служебный лист: уровень знака для ячеек «Списка» (3 — золото, 2 — серебро, 1 — бронза). Не редактировать.');
-  var blocks = { level: [], match: [], num: [], val: [] };
-  for (var r = 2; r <= rows; r++) {
-    var rowF = { level: [], match: [], num: [], val: [] };
-    for (var c = COL_RES_FIRST; c <= COL_RES_LAST; c++) {
-      var f = badgeFormulas(r, c);
-      rowF.level.push(f.level); rowF.match.push(f.match); rowF.num.push(f.num); rowF.val.push(f.val);
-    }
-    Object.keys(blocks).forEach(function (k) { blocks[k].push(rowF[k]); });
-  }
-  Object.keys(blocks).forEach(function (k) {
-    helper.getRange(2, BADGE_BLOCK[k], rows - 1, width).setFormulas(blocks[k]);
-  });
-  helper.hideSheet();
-
-  // Условное форматирование: наши правила — первыми, чужие правила сохраняем
-  var range = list.getRange(2, COL_RES_FIRST, rows - 1, width);
-  var others = list.getConditionalFormatRules().filter(function (rule) {
+  // Убираем прежний вариант на формулах: служебный лист «_знаки» и его правила условного форматирования
+  var helper = ss.getSheetByName(BADGE_SHEET);
+  if (helper) ss.deleteSheet(helper);
+  var rules = list.getConditionalFormatRules();
+  var keep = rules.filter(function (rule) {
     var bc = rule.getBooleanCondition();
     var vals = bc ? bc.getCriteriaValues() : [];
     return !(vals.length && String(vals[0]).indexOf(BADGE_SHEET) !== -1);
   });
-  var ours = [3, 2, 1].map(function (lvl) {
-    return SpreadsheetApp.newConditionalFormatRule()
-      .whenFormulaSatisfied('=INDIRECT("\'' + BADGE_SHEET + '\'!"&ADDRESS(ROW(),COLUMN()))=' + lvl)
-      .setBackground(BADGE_COLORS[lvl])
-      .setRanges([range])
-      .build();
-  });
-  list.setConditionalFormatRules(ours.concat(others));
-  return { ok: true, rows: rows - 1, added: added };
+  if (keep.length !== rules.length) list.setConditionalFormatRules(keep);
+
+  paintBadges();
+  return { ok: true, added: added };
 }
 
-// Если «Список» вырос (новая дата с большим числом участников) — достраиваем подсветку
-function ensureBadges() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var helper = ss.getSheetByName(BADGE_SHEET);
-  if (helper && helper.getMaxRows() < getSheet().getMaxRows()) setupBadges();
-}
-
-// Правка листа «Нормативы» — сразу пересчитываем служебные пороги
+// Любая правка (результат на листе норматива, порог на «Нормативах») — перекрашиваем «Список»
 function onEdit(e) {
   try {
-    if (e && e.range && e.range.getSheet().getName() === NORMS_SHEET) refreshNormNumbers(e.range.getSheet());
+    var name = e && e.range ? e.range.getSheet().getName() : '';
+    if (name === NORMS_SHEET) refreshNormNumbers(e.range.getSheet());
+    paintBadges();
   } catch (err) {}
 }
 
@@ -698,9 +688,10 @@ function onOpen() {
 
 function menuSetupBadges() {
   var res = setupBadges();
-  SpreadsheetApp.getUi().alert('Подсветка знаков настроена: строк «Списка» — ' + res.rows +
-    (res.added ? '.\nДобавлено нормативов: ' + res.added : '') +
-    '.\nПороги — на листе «' + NORMS_SHEET + '», их можно править.');
+  SpreadsheetApp.getUi().alert('Подсветка знаков обновлена.' +
+    (res.added ? '\nДобавлено нормативов: ' + res.added + '.' : '') +
+    '\nЦвета обновляются сами при каждой правке результатов.' +
+    '\nПороги — на листе «' + NORMS_SHEET + '», их можно править.');
 }
 
 function showLoadDialog() {
