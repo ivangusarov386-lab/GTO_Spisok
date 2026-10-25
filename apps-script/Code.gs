@@ -64,6 +64,7 @@ function doPost(e) {
     lock.waitLock(params.action === 'loadDate' ? 30000 : 10000);
     if (params.action === 'add') return jsonOut(addParticipant(params));
     if (params.action === 'loadDate') return jsonOut(loadDate(params.sheet, params.mode));
+    if (params.action === 'renumber') return jsonOut(sortAndRenumber());
     if (params.action && params.action !== 'mark') {
       return jsonOut({ ok: false, error: 'неизвестное действие: ' + params.action });
     }
@@ -71,9 +72,16 @@ function doPost(e) {
     var present = !!params.present;
     var sheet = getSheet();
 
-    // Строки могли сдвинуть (сортировка, вставка) — сверяем номер участника
-    // и при расхождении ищем его строку по столбцу A.
-    if (params.num !== undefined && params.num !== null && params.num !== '') {
+    // Строки могли сдвинуть (сортировка, перенумерация) — сверяем УИН, а если его нет — номер,
+    // и при расхождении ищем строку участника заново.
+    var uin = String(params.uin == null ? '' : params.uin).trim();
+    if (uin) {
+      var hereUin = row >= 2 ? String(sheet.getRange(row, COL_UIN).getValue()).trim() : '';
+      if (hereUin !== uin) {
+        row = findRowByUin(sheet, uin);
+        if (!row) return jsonOut({ ok: false, error: 'участник с УИН ' + uin + ' не найден в листе' });
+      }
+    } else if (params.num !== undefined && params.num !== null && params.num !== '') {
       var want = String(params.num).trim();
       var here = row >= 2 ? String(sheet.getRange(row, COL_NUM).getValue()).trim() : '';
       if (here !== want) {
@@ -260,6 +268,53 @@ function loadDate(name, mode) {
   setControl(name, people.length, archive);
   SpreadsheetApp.flush();
   return { ok: true, mode: 'replace', loaded: people.length, archive: archive, event: name };
+}
+
+// ===================== Упорядочить «Список» по ФИО и перенумеровать 1…N =====================
+// Строки листов нормативов связаны со строками «Списка» (строка 5 = участник в строке 5 «Списка»),
+// поэтому вместе с участниками переставляются и введённые результаты. Формулы не трогаем.
+function permuteRows(sh, firstCol, lastCol, n, order) {
+  if (lastCol < firstCol || n < 1) return;
+  var w = lastCol - firstCol + 1;
+  var rg = sh.getRange(2, firstCol, n, w);
+  var vals = rg.getValues(), forms = rg.getFormulas();
+  for (var c = 0; c < w; c++) {
+    var hasF = false, allF = true;
+    for (var r = 0; r < n; r++) { if (forms[r][c]) hasF = true; else allF = false; }
+    if (hasF) continue;                                         // столбец с формулами остаётся как есть
+    var col = vals.map(function (row) { return row[c]; });
+    sh.getRange(2, firstCol + c, n, 1).setValues(order.map(function (i) { return [col[i]]; }));
+  }
+}
+
+function sortAndRenumber() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var list = getSheet();
+  var last = list.getLastRow();
+  if (last < 2) return { ok: true, count: 0, moved: 0 };
+  var fio = list.getRange(2, COL_FIO, last - 1, 1).getValues();
+  var n = fio.length;
+  while (n > 0 && String(fio[n - 1][0]).trim() === '') n--;
+  if (!n) return { ok: true, count: 0, moved: 0 };
+  var key = function (i) { return String(fio[i][0]).trim().toLowerCase().replace(/ё/g, 'е'); };
+  var order = [];
+  for (var i = 0; i < n; i++) order.push(i);
+  order.sort(function (a, b) { var x = key(a), y = key(b); return x < y ? -1 : x > y ? 1 : a - b; });
+  var moved = order.filter(function (v, i) { return v !== i; }).length;
+
+  if (moved) {
+    permuteRows(list, 1, COL_LETTER, n, order);
+    ss.getSheets().forEach(function (sh) {
+      if (RESULT_SHEETS.indexOf(normName(sh.getName())) === -1) return;
+      permuteRows(sh, 2, sh.getLastColumn(), n, order);
+    });
+  }
+  var nums = [];
+  for (var k = 1; k <= n; k++) nums.push([k]);
+  list.getRange(2, COL_NUM, n, 1).setValues(nums);
+  SpreadsheetApp.flush();
+  try { paintBadges(); } catch (e) {}
+  return { ok: true, count: n, moved: moved };
 }
 
 // По алфавиту, без учёта регистра («РЯЗАНОВА» и «Рязанова» рядом), ё = е
@@ -510,6 +565,8 @@ function normValue(v, fmt) {
   if (fmt === 'мин:сек') {
     if (v instanceof Date) return v.getHours() * 60 + v.getMinutes(); // «6:20», распознанное как время
     var t = String(v).trim();
+    var hms = t.match(/^(\d+):(\d{1,2}):(\d{1,2})$/);                  // «00:01:07» → 1 мин 7 с
+    if (hms) return (+hms[1] * 60 + +hms[2]) * 60 + +hms[3];
     var mm = t.match(/^(\d+):(\d{1,2})/);
     if (mm) return +mm[1] * 60 + +mm[2];
     var x = parseFloat(t.replace(',', '.'));
@@ -665,6 +722,8 @@ var LONG_SHEET = 'длинная';
 function toMinSecText(v) {
   if (v instanceof Date) return v.getHours() + ':' + ('0' + v.getMinutes()).slice(-2); // «12:40», распознанное как время
   var t = String(v == null ? '' : v).trim();
+  var hms = t.match(/^(\d+):(\d{1,2}):(\d{1,2})$/);                  // «00:01:07» → «1:07»
+  if (hms) return (+hms[1] * 60 + +hms[2]) + ':' + ('0' + +hms[3]).slice(-2);
   var m = t.match(/^(\d+)\s*[:.,]\s*(\d{1,2})$/);
   if (!m) return null;
   var sec = m[2].length === 1 ? +m[2] * 10 : +m[2];                                   // 12,4 → 12:40
@@ -732,7 +791,18 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('ГТО')
     .addItem('Загрузить дату из регистрации…', 'showLoadDialog')
     .addItem('Подсветка знаков: создать / обновить', 'menuSetupBadges')
+    .addItem('Упорядочить по алфавиту и перенумеровать', 'menuRenumber')
     .addToUi();
+}
+
+function menuRenumber() {
+  var ui = SpreadsheetApp.getUi();
+  var ok = ui.alert('Упорядочить по алфавиту',
+    '«Список» отсортируется по ФИО, номера станут 1, 2, 3… по порядку. Явка и результаты переедут вместе с участниками.\n' +
+    'Уже напечатанные стикеры с номерами станут неверными. Продолжить?', ui.ButtonSet.YES_NO);
+  if (ok !== ui.Button.YES) return;
+  var res = sortAndRenumber();
+  ui.alert(res.ok ? 'Готово: участников — ' + res.count + (res.moved ? ', поменяли место — ' + res.moved : ', порядок уже был верный') + '.' : 'Ошибка: ' + res.error);
 }
 
 function menuSetupBadges() {
@@ -788,6 +858,16 @@ function getSheet() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   if (!sheet) throw new Error('нет листа «' + SHEET_NAME + '»');
   return sheet;
+}
+
+function findRowByUin(sheet, uin) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  var col = sheet.getRange(2, COL_UIN, lastRow - 1, 1).getValues();
+  for (var i = 0; i < col.length; i++) {
+    if (String(col[i][0]).trim() === uin) return i + 2;
+  }
+  return 0;
 }
 
 function findRowByNum(sheet, num) {

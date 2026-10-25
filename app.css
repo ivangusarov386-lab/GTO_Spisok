@@ -635,4 +635,4 @@
   .datebar .evload { height: 40px; padding: 0 14px; flex: none; }
   .datebar .iconbtn { width: 40px; height: 40px; }
   .datebar .iconbtn:disabled { opacity: .4; cursor: default; }
-  #evAppend.spin svg { animation: spin .8s linear infinite; }
+  #evAppend.spin svg, #evRenumber.spin svg { animation: spin .8s linear infinite; }

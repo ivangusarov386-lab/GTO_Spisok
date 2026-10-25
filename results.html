@@ -379,7 +379,8 @@
   // В единицах сравнения: «мин:сек» — секунды (12,14 → 12 мин 14 с; 5,3 → 5 мин 30 с)
   function compareValue(v, fmt) {
     if (fmt === 'мин:сек') {
-      var t = String(v).trim(), mm = t.match(/^(\d+):(\d{1,2})/);
+      var t = String(v).trim(), hms = t.match(/^(\d+):(\d{1,2}):(\d{1,2})$/), mm = t.match(/^(\d+):(\d{1,2})/);
+      if (hms) return (+hms[1] * 60 + +hms[2]) * 60 + +hms[3];   // «00:01:07» → 1 мин 7 с
       if (mm) return +mm[1] * 60 + +mm[2];
       var x = num(t);
       if (x === null) return null;
