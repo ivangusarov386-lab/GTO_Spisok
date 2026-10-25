@@ -559,6 +559,9 @@ var NORMS = {
 
 function normKeyPart(v) { return String(v == null ? '' : v).trim().toLowerCase(); }
 
+// «00:01:07» и «0:12:40» — ч:мм:сс; «12:40:00» — это «12:40», которое Google превратил во время
+function hmsSeconds(h, m, sec) { return h > 0 && sec === 0 ? h * 60 + m : (h * 60 + m) * 60 + sec; }
+
 // Число результата/порога в единицах сравнения. «мин:сек»: «6:20» → 380 с, 12,14 → 12 мин 14 с = 734 с
 function normValue(v, fmt) {
   if (v === '' || v === null || v === undefined) return '';
@@ -566,7 +569,7 @@ function normValue(v, fmt) {
     if (v instanceof Date) return v.getHours() * 60 + v.getMinutes(); // «6:20», распознанное как время
     var t = String(v).trim();
     var hms = t.match(/^(\d+):(\d{1,2}):(\d{1,2})$/);                  // «00:01:07» → 1 мин 7 с
-    if (hms) return (+hms[1] * 60 + +hms[2]) * 60 + +hms[3];
+    if (hms) return hmsSeconds(+hms[1], +hms[2], +hms[3]);
     var mm = t.match(/^(\d+):(\d{1,2})/);
     if (mm) return +mm[1] * 60 + +mm[2];
     var x = parseFloat(t.replace(',', '.'));
@@ -723,7 +726,7 @@ function toMinSecText(v) {
   if (v instanceof Date) return v.getHours() + ':' + ('0' + v.getMinutes()).slice(-2); // «12:40», распознанное как время
   var t = String(v == null ? '' : v).trim();
   var hms = t.match(/^(\d+):(\d{1,2}):(\d{1,2})$/);                  // «00:01:07» → «1:07»
-  if (hms) return (+hms[1] * 60 + +hms[2]) + ':' + ('0' + +hms[3]).slice(-2);
+  if (hms) { var tot = hmsSeconds(+hms[1], +hms[2], +hms[3]); return Math.floor(tot / 60) + ':' + ('0' + tot % 60).slice(-2); }
   var m = t.match(/^(\d+)\s*[:.,]\s*(\d{1,2})$/);
   if (!m) return null;
   var sec = m[2].length === 1 ? +m[2] * 10 : +m[2];                                   // 12,4 → 12:40

@@ -377,10 +377,12 @@
     return isNaN(n) ? null : n;
   }
   // В единицах сравнения: «мин:сек» — секунды (12,14 → 12 мин 14 с; 5,3 → 5 мин 30 с)
+  // «00:01:07» и «0:12:40» — ч:мм:сс; «12:40:00» — это «12:40», которое Google превратил во время
+  function hmsSeconds(h, m, sec) { return h > 0 && sec === 0 ? h * 60 + m : (h * 60 + m) * 60 + sec; }
   function compareValue(v, fmt) {
     if (fmt === 'мин:сек') {
       var t = String(v).trim(), hms = t.match(/^(\d+):(\d{1,2}):(\d{1,2})$/), mm = t.match(/^(\d+):(\d{1,2})/);
-      if (hms) return (+hms[1] * 60 + +hms[2]) * 60 + +hms[3];   // «00:01:07» → 1 мин 7 с
+      if (hms) return hmsSeconds(+hms[1], +hms[2], +hms[3]);
       if (mm) return +mm[1] * 60 + +mm[2];
       var x = num(t);
       if (x === null) return null;
@@ -479,7 +481,8 @@
     [9, 9, 18, 44, 9, 9, 9, 9, 9, 24, 11, 11, 11].forEach(function (w, i) { nw.getColumn(i + 1).width = w; });
     [10, 11, 12, 13].forEach(function (c) { nw.getColumn(c).font = { color: { argb: 'FF999999' } }; });
     nw.addRow([]);
-    nw.addRow(['Время длинного бега — минуты:секунды, например 12:40. Пороги можно править — цвета на листе «Результаты» пересчитаются.']);
+    var note = nw.addRow(['Время длинного бега — минуты:секунды, например 12:40. Пороги можно править — цвета на листе «Результаты» пересчитаются.']);
+    nw.mergeCells(note.number, 1, note.number, 9);
 
     // Лист «Результаты»: видимые столбцы + скрытые служебные (номер норматива и уровень знака)
     var nd = disciplines.length, R0 = 7, M0 = R0 + nd + 1, L0 = M0 + nd;
@@ -527,7 +530,84 @@
       });
       ws.autoFilter = { from: 'A1', to: colName(R0 + nd - 1) + '1' };
     }
+    if (nd && list.length) addStageSheets(wb, list, { nd: nd, R0: R0, nlist: nlist, headFill: headFill, lv: levelFormula });
     return wb;
+  }
+
+  // Формула уровня знака (0–3) для результата x по строке норматива m на листе «Нормативы»
+  function levelFormula(x, m) {
+    var N = "'Нормативы'!";
+    var V = 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",' + xlSeconds(x) + ',' + x + ')';
+    var T = function (col) { return 'INDEX(' + N + '$' + col + ':$' + col + ',' + m + ')'; };
+    var cmp = function (col, op) { return 'AND(' + T(col) + '<>"",' + V + op + T(col) + ')'; };
+    var lv = function (op) { return 'IF(' + cmp('M', op) + ',3,IF(' + cmp('L', op) + ',2,IF(' + cmp('K', op) + ',1,0)))'; };
+    return 'IF(OR(' + m + '="",NOT(ISNUMBER(' + x + '))),0,IF(INDEX(' + N + '$E:$E,' + m + ')="больше",' + lv('>=') + ',' + lv('<=') + '))';
+  }
+
+  // Листы по ступеням: участники ступени, в G — выпадающий список нормативов их ступени и пола,
+  // в H — результат по выбранному нормативу с листа «Результаты» (подсвечен знаком).
+  // Служебно: скрытый лист «_списки» (названия нормативов по ступени и полу), скрытые столбцы J:K.
+  function addStageSheets(wb, list, o) {
+    var lists = wb.addWorksheet('_списки', { state: 'hidden' });
+    var LS = "'_списки'!", RS = "'Результаты'!", NS = "'Нормативы'!";
+    var resCols = colName(o.R0) + '$1:$' + colName(o.R0 + o.nd - 1) + '$1';
+    var groups = {}, slot = {}, col = 1;
+    o.nlist.forEach(function (n) {
+      var p = n.key.split('|'), g = p[0] + '|' + p[1];
+      if (!groups[g]) groups[g] = [];
+      groups[g].push({ label: n.name || p[2], col: p[2] });
+    });
+    Object.keys(groups).forEach(function (g) {
+      var seen = {};
+      var items = groups[g].map(function (it) {
+        var label = seen[it.label] ? it.label + ' (' + it.col + ')' : it.label;
+        seen[label] = true;
+        return [label, it.col];
+      });
+      lists.getRow(1).getCell(col).value = g;
+      items.forEach(function (it, i) { lists.getRow(i + 2).getCell(col).value = it[0]; lists.getRow(i + 2).getCell(col + 1).value = it[1]; });
+      var a = colName(col), b = colName(col + 1), last = items.length + 1;
+      slot[g] = { labels: LS + '$' + a + '$2:$' + a + '$' + last, cols: LS + '$' + b + '$2:$' + b + '$' + last };
+      col += 2;
+    });
+
+    var stages = {};
+    list.forEach(function (d, i) {
+      var st = (String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase() || '—';
+      (stages[st] = stages[st] || []).push({ d: d, src: i + 2 });
+    });
+    Object.keys(stages).sort(function (a, b) { return romanToInt(a) - romanToInt(b); }).forEach(function (st) {
+      var ws = wb.addWorksheet((st + ' ступень').slice(0, 31), { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
+      ws.getRow(1).values = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс', 'Норматив', 'Результат', '', 'столбец (служ.)', 'норматив № (служ.)', 'знак (служ.)'];
+      ws.getRow(1).font = { bold: true };
+      for (var c = 1; c <= 8; c++) ws.getRow(1).getCell(c).fill = o.headFill;
+      stages[st].forEach(function (it, i) {
+        var r = i + 2, d = it.d, row = ws.getRow(r);
+        var sl = slot[st + '|' + String(d.pol || '').trim().toLowerCase()];
+        row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d)];
+        if (sl) {
+          row.getCell(7).dataValidation = { type: 'list', allowBlank: true, formulae: [sl.labels],
+            showErrorMessage: true, errorTitle: 'Норматив', error: 'Выберите норматив из списка' };
+          row.getCell(10).value = { formula: 'IF($G' + r + '="","",IFERROR(INDEX(' + sl.cols + ',MATCH($G' + r + ',' + sl.labels + ',0)),""))', result: '' };
+        }
+        var src = RS + '$' + colName(o.R0) + '$' + it.src + ':$' + colName(o.R0 + o.nd - 1) + '$' + it.src;
+        var pick = 'INDEX(' + src + ',MATCH($J' + r + ',' + RS + '$' + resCols + ',0))';
+        row.getCell(8).value = { formula: 'IF($J' + r + '="","",IFERROR(IF(' + pick + '="","",' + pick + '),""))', result: '' };
+        row.getCell(8).alignment = { horizontal: 'center' };
+        row.getCell(11).value = { formula: 'IF($J' + r + '="","",IFERROR(MATCH(UPPER(LEFT(TRIM($D' + r + '),FIND(" ",TRIM($D' + r + ')&" ")-1))&"|"&LOWER(TRIM($E' + r + '))&"|"&LOWER(TRIM($J' + r + ')),' + NS + '$J:$J,0),""))', result: '' };
+        row.getCell(12).value = { formula: o.lv('H' + r, 'K' + r), result: 0 };
+      });
+      [6, 34, 15, 22, 10, 8, 44, 12, 3].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+      [10, 11, 12].forEach(function (c) { ws.getColumn(c).hidden = true; });
+      var last = stages[st].length + 1;
+      var rules = [3, 2, 1].map(function (lvl, i) {
+        return { type: 'expression', priority: i + 1, formulae: ['$L2=' + lvl],
+                 style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
+      });
+      rules.push({ type: 'expression', priority: 4, formulae: ['AND($K2<>"",INDEX(' + NS + '$F:$F,$K2)="мин:сек")'], style: { numFmt: XL_TIME } });
+      ws.addConditionalFormatting({ ref: 'H2:H' + last, rules: rules });
+      ws.autoFilter = { from: 'A1', to: 'H1' };
+    });
   }
 
   function exportExcel() {
