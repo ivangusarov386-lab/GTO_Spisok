@@ -358,7 +358,7 @@
   function valueNode(d, j) {
     var v = d.res[j];
     var lvl = has(v) ? badgeLevel(d, j) : 0;
-    var node = el('span', lvl ? 'lv' + lvl : '', has(v) ? v : '—');
+    var node = el('span', lvl ? 'lv' + lvl : '', has(v) ? shownValue(d, j) : '—');
     if (lvl) node.title = ['', 'Бронза', 'Серебро', 'Золото'][lvl];
     return node;
   }
@@ -388,6 +388,14 @@
     }
     return num(v);
   }
+  // Длинный бег показываем как «мин:сек»: 12,40 / 12.4 / 12:40:00 → 12:40
+  function secToMinSec(sec) { var m = Math.floor(sec / 60); return m + ':' + ('0' + Math.round(sec - m * 60)).slice(-2); }
+  function shownValue(d, j) {
+    var v = d.res[j], n = normOf(d, j);
+    if (!n || n.fmt !== 'мин:сек') return v;
+    var sec = compareValue(v, n.fmt);
+    return sec === null ? v : secToMinSec(sec);
+  }
   function badgeLevel(d, j) {
     var st = (String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase();
     var key = st + '|' + String(d.pol || '').trim().toLowerCase() + '|' + String(disciplines[j].name || '').trim().toLowerCase();
@@ -401,8 +409,8 @@
   }
 
   // ---- Выгрузка в Excel: результаты + лист «Нормативы»; знак считается формулами Excel ----
-  // Время в формате «мин,сек» как в протоколе: 6,20 = 6 мин 20 с. Формулы без LET и текстовых чисел —
-  // работают в Excel и LibreOffice при любой локали.
+  // Длинный бег — «мин:сек» (12:40); число вида 12,40 тоже понимается как 12 мин 40 с.
+  // Формулы без LET и текстовых чисел — работают в Excel и LibreOffice при любой локали.
   var EXCEL_LIB = 'vendor/exceljs/exceljs.min.js';
   var XL_COLORS = { 3: 'FFFFD966', 2: 'FFD9D9D9', 1: 'FFF4B183' };
   function loadExcelJS() {
@@ -416,7 +424,9 @@
     });
   }
   function colName(c) { var s = ''; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; } return s; }
-  function toMinSec(sec) { var m = Math.floor(sec / 60); return Math.round((m + (sec - m * 60) / 100) * 100) / 100; }
+  // «мин:сек» в Excel — значение времени с форматом [h]:mm: на экране 12:40, набранное «12:40» читается так же
+  var XL_TIME = '[h]:mm';
+  function toXlTime(sec) { return sec / 1440; }
   // Значение для ячейки Excel: числа — числами (5,3 → 5.3; «6:20» → 6.20), остальное — текстом
   function xlValue(v) {
     if (!has(v)) return null;
@@ -430,6 +440,8 @@
     var st = (String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase();
     return norms[st + '|' + String(d.pol || '').trim().toLowerCase() + '|' + String(disciplines[j].name || '').trim().toLowerCase()];
   }
+
+  function xlSeconds(x) { return 'IF(' + x + '<1,ROUND(' + x + '*1440,0),INT(' + x + ')*60+ROUND((' + x + '-INT(' + x + '))*100,0))'; }
 
   function buildWorkbook(ExcelJS, list) {
     var wb = new ExcelJS.Workbook();
@@ -453,20 +465,20 @@
     nlist.forEach(function (n, i) {
       var r = i + 2, p = n.key.split('|'), ms = n.fmt === 'мин:сек';
       normRow[n.key] = r;
-      var thr = [n.b, n.s, n.g].map(function (t) { var x = num(t); return x === null ? null : ms ? toMinSec(x) : x; });
+      var thr = [n.b, n.s, n.g].map(function (t) { var x = num(t); return x === null ? null : ms ? toXlTime(x) : x; });
       var row = nw.getRow(r);
       row.values = [p[0], p[1], p[2], n.name || '', n.dir, n.fmt].concat(thr);
       row.getCell(10).value = { formula: 'UPPER(TRIM(A' + r + '))&"|"&LOWER(TRIM(B' + r + '))&"|"&LOWER(TRIM(C' + r + '))', result: n.key };
       ['G', 'H', 'I'].forEach(function (c, k) {
-        row.getCell(11 + k).value = { formula: 'IF(' + c + r + '="","",IF($F' + r + '="мин:сек",INT(' + c + r + ')*60+ROUND((' + c + r + '-INT(' + c + r + '))*100,0),' + c + r + '))',
+        row.getCell(11 + k).value = { formula: 'IF(' + c + r + '="","",IF($F' + r + '="мин:сек",' + xlSeconds(c + r) + ',' + c + r + '))',
                                       result: num([n.b, n.s, n.g][k]) === null ? '' : num([n.b, n.s, n.g][k]) };
-        if (ms) row.getCell(7 + k).numFmt = '0.00';
+        if (ms) row.getCell(7 + k).numFmt = XL_TIME;
       });
     });
     [9, 9, 18, 44, 9, 9, 9, 9, 9, 24, 11, 11, 11].forEach(function (w, i) { nw.getColumn(i + 1).width = w; });
     [10, 11, 12, 13].forEach(function (c) { nw.getColumn(c).font = { color: { argb: 'FF999999' } }; });
     nw.addRow([]);
-    nw.addRow(['Время пишется как в протоколе: 6,20 — это 6 мин 20 с. Пороги можно править — цвета на листе «Результаты» пересчитаются.']);
+    nw.addRow(['Время длинного бега — минуты:секунды, например 12:40. Пороги можно править — цвета на листе «Результаты» пересчитаются.']);
 
     // Лист «Результаты»: видимые столбцы + скрытые служебные (номер норматива и уровень знака)
     var nd = disciplines.length, R0 = 7, M0 = R0 + nd + 1, L0 = M0 + nd;
@@ -481,13 +493,14 @@
       for (var j = 0; j < nd; j++) {
         var n = normOf(d, j), x = colName(R0 + j) + r, m = colName(M0 + j) + r;
         var cell = row.getCell(R0 + j);
-        cell.value = xlValue(d.res[j]);
-        if (n && n.fmt === 'мин:сек' && typeof cell.value === 'number') cell.numFmt = '0.00';
+        var sec = n && n.fmt === 'мин:сек' && has(d.res[j]) ? compareValue(d.res[j], n.fmt) : null;
+        if (sec !== null) { cell.value = toXlTime(sec); cell.numFmt = XL_TIME; }
+        else cell.value = xlValue(d.res[j]);
         cell.alignment = { horizontal: 'center' };
         row.getCell(M0 + j).value = {
           formula: 'IFERROR(MATCH(UPPER(LEFT(TRIM($D' + r + '),FIND(" ",TRIM($D' + r + ')&" ")-1))&"|"&LOWER(TRIM($E' + r + '))&"|"&LOWER(TRIM(' + colName(R0 + j) + '$1)),' + N + '$J:$J,0),"")',
           result: n ? normRow[n.key] : '' };
-        var V = 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",INT(' + x + ')*60+ROUND((' + x + '-INT(' + x + '))*100,0),' + x + ')';
+        var V = 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",' + xlSeconds(x) + ',' + x + ')';
         var T = function (col) { return 'INDEX(' + N + '$' + col + ':$' + col + ',' + m + ')'; };
         var cmp = function (col, op) { return 'AND(' + T(col) + '<>"",' + V + op + T(col) + ')'; };
         var lv = function (op) { return 'IF(' + cmp('M', op) + ',3,IF(' + cmp('L', op) + ',2,IF(' + cmp('K', op) + ',1,0)))'; };

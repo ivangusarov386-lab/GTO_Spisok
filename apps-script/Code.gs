@@ -651,8 +651,53 @@ function setupBadges() {
   });
   if (keep.length !== rules.length) list.setConditionalFormatRules(keep);
 
+  setupLongSheet();
+  SpreadsheetApp.flush();
   paintBadges();
   return { ok: true, added: added };
+}
+
+// ===================== Длинный бег: результат в виде «мин:сек» =====================
+// На листе «длинная» результат вводят в столбец B (текстом): «12,40», «12.4», «12:40» → «12:40».
+// Целые числа не трогаем (на I ступени там метры шестиминутного бега). Столбец C просто повторяет B.
+var LONG_SHEET = 'длинная';
+
+function toMinSecText(v) {
+  if (v instanceof Date) return v.getHours() + ':' + ('0' + v.getMinutes()).slice(-2); // «12:40», распознанное как время
+  var t = String(v == null ? '' : v).trim();
+  var m = t.match(/^(\d+)\s*[:.,]\s*(\d{1,2})$/);
+  if (!m) return null;
+  var sec = m[2].length === 1 ? +m[2] * 10 : +m[2];                                   // 12,4 → 12:40
+  if (sec > 59) return null;
+  return +m[1] + ':' + ('0' + sec).slice(-2);
+}
+
+function fixLongCells(range) {
+  var vals = range.getValues(), forms = range.getFormulas(), changed = false;
+  var out = vals.map(function (row, i) {
+    return row.map(function (v, j) {
+      if (forms[i][j]) return v;
+      var t = toMinSecText(v);
+      if (t === null || t === v) return v;
+      changed = true;
+      return t;
+    });
+  });
+  if (changed) range.setNumberFormat('@').setValues(out);
+}
+
+// Настройка листа «длинная»: C = B (без пересчёта в «12,40»), уже введённые результаты — в «мин:сек»
+function setupLongSheet() {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheets().filter(function (x) {
+    return normName(x.getName()) === LONG_SHEET;
+  })[0];
+  if (!sh || sh.getMaxRows() < 2) return;
+  var n = sh.getMaxRows() - 1;
+  var f = [];
+  for (var r = 2; r <= n + 1; r++) f.push(['=B' + r + '&""']);
+  sh.getRange(2, 3, n, 1).setFormulas(f);
+  var last = sh.getLastRow();
+  if (last >= 2) fixLongCells(sh.getRange(2, 2, last - 1, 1));
 }
 
 // Любая правка (результат на листе норматива, порог на «Нормативах») — перекрашиваем «Список»
@@ -660,6 +705,10 @@ function onEdit(e) {
   try {
     var name = e && e.range ? e.range.getSheet().getName() : '';
     if (name === NORMS_SHEET) refreshNormNumbers(e.range.getSheet());
+    if (normName(name) === LONG_SHEET && e.range.getColumn() <= 2 && e.range.getLastColumn() >= 2) {
+      var rg = e.range, r0 = Math.max(rg.getRow(), 2), r1 = rg.getLastRow();
+      if (r1 >= r0) fixLongCells(rg.getSheet().getRange(r0, 2, r1 - r0 + 1, 1));
+    }
     paintBadges();
   } catch (err) {}
 }
@@ -691,6 +740,7 @@ function menuSetupBadges() {
   SpreadsheetApp.getUi().alert('Подсветка знаков обновлена.' +
     (res.added ? '\nДобавлено нормативов: ' + res.added + '.' : '') +
     '\nЦвета обновляются сами при каждой правке результатов.' +
+    '\nДлинный бег записывается как «мин:сек»: 12,40 → 12:40.' +
     '\nПороги — на листе «' + NORMS_SHEET + '», их можно править.');
 }
 
