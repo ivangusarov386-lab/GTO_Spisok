@@ -511,6 +511,8 @@
     ws.getColumn(1).alignment = { horizontal: 'center' };
     ws.getColumn(1).font = { bold: true, color: { argb: 'FF15803D' } };
     ws.getCell('A1').font = bold;
+    ws.getCell('C1').note = 'Чтобы подсветка знаков не пропала, данные из другого файла вставляйте только значениями: ' +
+      'правый клик → Параметры вставки → «Значения» (123) или Ctrl+Alt+V → «значения». Обычная вставка Ctrl+V стирает подсветку в этих ячейках.';
     for (var k = 0; k < nd; k++) ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
 
     if (nd) {
