@@ -672,7 +672,7 @@
     var tnr = function (sz, b) { return { name: 'Times New Roman', size: sz, bold: !!b }; };
     var thin = { style: 'thin' }, box = { top: thin, left: thin, bottom: thin, right: thin };
     var center = { horizontal: 'center', vertical: 'middle', wrapText: true };
-    [3.8, 22.7, 16.4, 4.8, 20.1, 14.8, 6.7, 12.7, 8.1, 6.9].forEach(function (w, i) { pw.getColumn(i + 1).width = w; });
+    [3.8, 30, 16.4, 9.5, 18, 20, 6.7, 12.7, 8.1, 6.9].forEach(function (w, i) { pw.getColumn(i + 1).width = w; });
 
     var put = function (ref, merge, text, font, align) {
       if (merge) pw.mergeCells(merge);
@@ -723,11 +723,13 @@
       row.getCell(1).value = f(String(k));
       row.getCell(2).value = f('INDEX(' + RS + '$C:$C,' + L + ')&""');
       row.getCell(3).value = f('INDEX(' + RS + '$D:$D,' + L + ')&""');
-      row.getCell(4).value = f('LOWER(LEFT(TRIM(INDEX(' + RS + '$F:$F,' + L + ')),1))');
-      row.getCell(6).value = f('UPPER(LEFT(TRIM(' + st + '),FIND(" ",TRIM(' + st + ')&" ")-1))');
-      row.getCell(7).value = f('INDEX(' + RS + '$B:$B,' + L + ')&""');
-      row.getCell(8).value = f('IF(' + res + '="","",' + res + ')');
-      row.getCell(9).value = f('CHOOSE($O' + r + '+1,"","бронза","серебро","золото")');
+      row.getCell(4).value = f('INDEX(' + RS + '$F:$F,' + L + ')&""');
+      row.getCell(6).value = f(st + '&""');
+      // время длинного бега — текстом «12:14» (формат ячейки не зависит от версии Excel)
+      var sec = xlSeconds(res), isTime = 'AND($N' + r + '<>"",INDEX(' + NS + '$F:$F,$N' + r + ')="мин:сек")';
+      row.getCell(8).value = f('IF(' + res + '="","",IFERROR(IF(' + isTime + ',INT(' + sec + '/60)&":"&RIGHT("0"&MOD(' + sec + ',60),2),' + res + '),' + res + '))');
+      // G (нагрудный номер) и I (уровень выполнения) — пустые
+      row.height = 25;
       for (var c = 1; c <= 10; c++) {
         var cell = row.getCell(c);
         cell.border = box;
@@ -740,8 +742,7 @@
       return { type: 'expression', priority: i + 1, formulae: ['$O' + first + '=' + lvl],
                style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
     });
-    rules.push({ type: 'expression', priority: 4, formulae: ['AND($N' + first + '<>"",INDEX(' + NS + '$F:$F,$N' + first + ')="мин:сек")'], style: { numFmt: XL_TIME } });
-    pw.addConditionalFormatting({ ref: 'H' + first + ':I' + lastRow, rules: rules });
+    pw.addConditionalFormatting({ ref: 'H' + first + ':H' + lastRow, rules: rules });
 
     pw.mergeCells('A' + sig + ':J' + sig);
     var s = pw.getCell('A' + sig);
