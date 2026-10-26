@@ -451,6 +451,8 @@
     var wb = new ExcelJS.Workbook();
     wb.calcProperties.fullCalcOnLoad = true;
     var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] });
+    var aw = wb.addWorksheet('Анализ', { views: [{ state: 'frozen', ySplit: 1 }] });
+    var pw = wb.addWorksheet('Протокол');
     var nw = wb.addWorksheet('Нормативы', { views: [{ state: 'frozen', ySplit: 1 }] });
     var N = "'Нормативы'!";
     var bold = { bold: true }, headFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF1F6' } };
@@ -471,7 +473,7 @@
       normRow[n.key] = r;
       var thr = [n.b, n.s, n.g].map(function (t) { var x = num(t); return x === null ? null : ms ? toXlTime(x) : x; });
       var row = nw.getRow(r);
-      row.values = [p[0], p[1], p[2], n.name || '', n.dir, n.fmt].concat(thr);
+      row.values = [p[0], p[1], p[2], n.name || p[2], n.dir, n.fmt].concat(thr);
       row.getCell(10).value = { formula: 'UPPER(TRIM(A' + r + '))&"|"&LOWER(TRIM(B' + r + '))&"|"&LOWER(TRIM(C' + r + '))', result: n.key };
       ['G', 'H', 'I'].forEach(function (c, k) {
         row.getCell(11 + k).value = { formula: 'IF(' + c + r + '="","",IF($F' + r + '="мин:сек",' + xlSeconds(c + r) + ',' + c + r + '))',
@@ -514,7 +516,8 @@
     if (nd) {
       // «_знаки»: G:Q — уровень 0–3 (на тех же местах, что результаты), дальше — номер норматива и число
       var hs = wb.addWorksheet('_знаки', { state: 'hidden' });
-      var RS = "'Результаты'!", M0 = R0 + nd + 1, X0 = M0 + nd + 1;
+      var RS = "'Результаты'!", M0 = R0 + nd + 1, X0 = M0 + nd + 1, T0 = X0 + nd + 1, SEL = T0 + nd + 1;
+      var PROT_PICK = "'Протокол'!$D$7";
       var byRow = list.map(function (d) { return d; });
       hs.getCell('A1').value = 'Служебный лист: знак (3 — золото, 2 — серебро, 1 — бронза) для ячеек листа «Результаты». Не редактировать.';
       for (var r = 2; r <= rows; r++) {
@@ -531,7 +534,14 @@
             formula: 'IF(' + m + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),"")))))',
             result: '' };
           hrow.getCell(R0 + j).value = { formula: levelFormula(x, m), result: d && has(d.res[j]) ? badgeLevel(d, j) : 0 };
+          // название испытания этой ячейки — для «Анализа» и «Протокола»
+          hrow.getCell(T0 + j).value = { formula: 'IF(' + m + '="","",INDEX(' + N + '$D:$D,' + m + ')&"")',
+            result: d && n && has(d.res[j]) ? (n.name || String(disciplines[j].name).toLowerCase()) : '' };
         }
+        // испытание, выбранное в «Протоколе»: в каком столбце оно у участника и сколько таких до этой строки
+        var sel = colName(SEL) + r;
+        hrow.getCell(SEL).value = { formula: 'IF(' + at('C') + '="","",IFERROR(MATCH(' + PROT_PICK + ',$' + colName(T0) + r + ':$' + colName(T0 + nd - 1) + r + ',0),""))' };
+        hrow.getCell(SEL + 1).value = { formula: r === 2 ? 'IF(' + sel + '="",0,1)' : 'IF(' + sel + '="",' + colName(SEL + 1) + (r - 1) + ',' + colName(SEL + 1) + (r - 1) + '+1)' };
       }
       var lastCol = colName(R0 + nd - 1);
       ws.addConditionalFormatting({
@@ -542,6 +552,12 @@
         })
       });
       ws.autoFilter = { from: 'A1', to: lastCol + '1' };
+    }
+    if (nd) {
+      var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, nd: nd, nlist: nlist, list: list };
+      var tests = testList(hx);
+      addAnalysisSheet(aw, tests, hx);
+      addProtocolSheet(wb, pw, tests, hx);
     }
     if (nd && list.length) addStageSheets(wb, list, { nd: nd, R0: R0, nlist: nlist, headFill: headFill, lv: levelFormula });
     return wb;
@@ -557,11 +573,152 @@
     return 'IF(OR(' + m + '="",NOT(ISNUMBER(' + x + '))),0,IF(INDEX(' + N + '$E:$E,' + m + ')="больше",' + lv('>=') + ',' + lv('<=') + '))';
   }
 
+  // Испытания для «Анализа» и выпадающего списка «Протокола»: уникальные названия с листа «Нормативы»
+  // для ступеней, которые есть в выгрузке; сначала те, по которым уже есть результаты
+  function testList(hx) {
+    var order = disciplines.map(function (d) { return String(d.name).trim().toLowerCase(); });
+    var stages = {}, done = {}, byName = {}, out = [];
+    hx.list.forEach(function (d) {
+      stages[(String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase()] = true;
+      for (var j = 0; j < hx.nd; j++) { var n = normOf(d, j); if (n && has(d.res[j])) done[n.name || order[j]] = true; }
+    });
+    hx.nlist.forEach(function (n) {
+      var p = n.key.split('|'), name = n.name || p[2];
+      if (!stages[p[0]]) return;
+      if (!byName[name]) { byName[name] = { name: name, col: order.indexOf(p[2]), stages: [] }; out.push(byName[name]); }
+      if (byName[name].stages.indexOf(p[0]) === -1) byName[name].stages.push(p[0]);
+    });
+    out.forEach(function (t) { t.done = !!done[t.name]; });
+    out.sort(function (a, b) { return (b.done - a.done) || (a.col - b.col) || (a.name < b.name ? -1 : 1); });
+    return out;
+  }
+
+  function addAnalysisSheet(aw, tests, hx) {
+    var Z = "'_знаки'!", last = hx.rows;
+    var names = Z + '$' + colName(hx.T0) + '$2:$' + colName(hx.T0 + hx.nd - 1) + '$' + last;
+    var lvls = Z + '$' + colName(hx.R0) + '$2:$' + colName(hx.R0 + hx.nd - 1) + '$' + last;
+    aw.getRow(1).values = ['Испытание', 'Ступени', 'Сдавали', 'Золото', 'Серебро', 'Бронза', 'Сдали на знак', 'Без знака'];
+    aw.getRow(1).font = { bold: true };
+    var fills = { 4: 'FFFFD966', 5: 'FFD9D9D9', 6: 'FFF4B183' };
+    for (var c = 1; c <= 8; c++) aw.getRow(1).getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fills[c] || 'FFEEF1F6' } };
+    tests.forEach(function (t, i) {
+      var r = i + 2, A = '$A' + r, row = aw.getRow(r);
+      row.getCell(1).value = t.name;
+      row.getCell(2).value = t.stages.join(', ');
+      row.getCell(3).value = { formula: 'COUNTIF(' + names + ',' + A + ')' };
+      [3, 2, 1].forEach(function (lvl, k) { row.getCell(4 + k).value = { formula: 'COUNTIFS(' + names + ',' + A + ',' + lvls + ',' + lvl + ')' }; });
+      row.getCell(7).value = { formula: 'D' + r + '+E' + r + '+F' + r };
+      row.getCell(8).value = { formula: 'C' + r + '-G' + r };
+      row.getCell(7).font = { bold: true };
+    });
+    var tr = tests.length + 3, end = tests.length + 1, tot = aw.getRow(tr);
+    tot.getCell(1).value = 'Итого';
+    for (var k = 3; k <= 8; k++) tot.getCell(k).value = { formula: 'SUM(' + colName(k) + '2:' + colName(k) + end + ')' };
+    tot.font = { bold: true };
+    [52, 12, 10, 10, 10, 10, 14, 11].forEach(function (w, i) { aw.getColumn(i + 1).width = w; });
+    for (var c2 = 2; c2 <= 8; c2++) aw.getColumn(c2).alignment = { horizontal: 'center' };
+    aw.addRow([]);
+    aw.addRow([]);
+    aw.getCell('A' + (tr + 2)).value = '«Сдавали» — у скольких участников есть результат; «Сдали на знак» — золото, серебро и бронза вместе. Считается само по листу «Результаты».';
+  }
+
+  var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+
+  // «Протокол» — бланк центра тестирования. В D7 выбирают вид испытания — строки заполняются сами
+  function addProtocolSheet(wb, pw, tests, hx) {
+    var RS = "'Результаты'!", Z = "'_знаки'!", NS = "'Нормативы'!";
+    var slots = Math.max(207, hx.list.length), first = 10, lastRow = first + slots - 1, sig = lastRow + 2;
+    var tnr = function (sz, b) { return { name: 'Times New Roman', size: sz, bold: !!b }; };
+    var thin = { style: 'thin' }, box = { top: thin, left: thin, bottom: thin, right: thin };
+    var center = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    [3.8, 22.7, 16.4, 4.8, 20.1, 14.8, 6.7, 12.7, 8.1, 6.9].forEach(function (w, i) { pw.getColumn(i + 1).width = w; });
+
+    var put = function (ref, merge, text, font, align) {
+      if (merge) pw.mergeCells(merge);
+      var c = pw.getCell(ref); c.value = text; c.font = font; c.alignment = align;
+    };
+    put('A2', 'A2:J2', 'ЦЕНТР ТЕСТИРОВАНИЯ ВСЕРОССИЙСКОГО ФИЗКУЛЬТУРНО-СПОРТИВНОГО КОМПЛЕКСА «ГОТОВ К ТРУДУ И ОБОРОНЕ» (ГТО)', tnr(12, true), center);
+    put('A3', 'A3:J4', 'ГБОУ ДПО МЦВП ( Школа № 548 )', tnr(12, true), center);
+    put('A5', 'A5:J6', 'Протокол выполнения государственных требований \nк физической подготовленности граждан Российской Федерации№________', tnr(12, true), center);
+    put('A7', 'A7:C7', 'вид испытания (тест):', tnr(12, true), { horizontal: 'right', vertical: 'middle', wrapText: true });
+    pw.mergeCells('D7:E7');
+    var pick = pw.getCell('D7');
+    pick.value = tests.length ? tests[0].name : '';
+    pick.font = tnr(11, true);
+    pick.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+    pick.border = { bottom: { style: 'thin' } };
+    if (tests.length) {
+      var lists = wb.getWorksheet('_списки') || wb.addWorksheet('_списки', { state: 'hidden' });
+      var lc = 40;                                                 // AN — подальше от списков листов ступеней
+      lists.getRow(1).getCell(lc).value = 'испытания (протокол)';
+      tests.forEach(function (t, i) { lists.getRow(i + 2).getCell(lc).value = t.name; });
+      pick.dataValidation = { type: 'list', allowBlank: true, formulae: ["'_списки'!$" + colName(lc) + '$2:$' + colName(lc) + '$' + (tests.length + 1)],
+        showInputMessage: true, promptTitle: 'Вид испытания', prompt: 'Выберите испытание — таблица заполнится сдававшими его',
+        showErrorMessage: true, errorTitle: 'Вид испытания', error: 'Выберите испытание из списка' };
+    }
+    put('F7', null, 'дата выполнения: ', tnr(12, true), center);
+    var ev = String(($('evPill') && $('evPill').textContent) || ''), dm = ev.match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
+    var dd = dm ? +dm[1] : null, mo = dm ? MONTHS[+dm[2] - 1] : '', yy = dm ? (dm[3].length === 2 ? 2000 + +dm[3] : +dm[3]) : '';
+    put('G7', null, dd, tnr(12, true), center);
+    put('H7', null, mo, tnr(12, true), center);
+    put('I7', null, yy ? yy + ' года' : '', tnr(12, true), center);
+    pw.getRow(2).height = 15.6; pw.getRow(7).height = 46.8; pw.getRow(9).height = 69.6;
+
+    ['№\n п/п', 'Ф.И.О.', ' УИН участника', 'пол', 'место учебы (работы) \n(при наличии)', 'ступень ГТО',
+     'нагрудный номер (при наличии)', 'результат выполнения', 'уровень\n выполнения', 'спортивное звание или спортивный разряд (при наличии)']
+      .forEach(function (h, i) { var c = pw.getRow(9).getCell(i + 1); c.value = h; c.font = tnr(i === 1 ? 16 : 10, true); c.alignment = center; c.border = box; });
+
+    // Служебные столбцы L:O (скрыты): строка участника на «Результатах», столбец испытания, № норматива, уровень
+    var selCol = colName(hx.SEL), cntCol = colName(hx.SEL + 1), zWide = Z + '$A:$' + colName(hx.SEL + 1), rWide = RS + '$A:$' + colName(hx.R0 + hx.nd);
+    for (var k = 1; k <= slots; k++) {
+      var r = first + k - 1, row = pw.getRow(r), L = '$L' + r, M = '$M' + r;
+      row.getCell(12).value = { formula: 'IFERROR(MATCH(' + k + ',' + Z + '$' + cntCol + '$2:$' + cntCol + '$' + hx.rows + ',0)+1,"")' };
+      row.getCell(13).value = { formula: 'IF(' + L + '="","",INDEX(' + Z + '$' + selCol + ':$' + selCol + ',' + L + '))' };
+      row.getCell(14).value = { formula: 'IF(' + M + '="","",INDEX(' + zWide + ',' + L + ',' + (hx.M0 - 1) + '+' + M + '))' };
+      row.getCell(15).value = { formula: 'IF(' + M + '="",0,INDEX(' + zWide + ',' + L + ',' + (hx.R0 - 1) + '+' + M + '))' };
+      var f = function (expr) { return { formula: 'IF(' + L + '="","",' + expr + ')' }; };
+      var st = 'INDEX(' + RS + '$E:$E,' + L + ')';
+      var res = 'INDEX(' + rWide + ',' + L + ',' + (hx.R0 - 1) + '+' + M + ')';
+      row.getCell(1).value = f(String(k));
+      row.getCell(2).value = f('INDEX(' + RS + '$C:$C,' + L + ')&""');
+      row.getCell(3).value = f('INDEX(' + RS + '$D:$D,' + L + ')&""');
+      row.getCell(4).value = f('LOWER(LEFT(TRIM(INDEX(' + RS + '$F:$F,' + L + ')),1))');
+      row.getCell(6).value = f('UPPER(LEFT(TRIM(' + st + '),FIND(" ",TRIM(' + st + ')&" ")-1))');
+      row.getCell(7).value = f('INDEX(' + RS + '$B:$B,' + L + ')&""');
+      row.getCell(8).value = f('IF(' + res + '="","",' + res + ')');
+      row.getCell(9).value = f('CHOOSE($O' + r + '+1,"","бронза","серебро","золото")');
+      for (var c = 1; c <= 10; c++) {
+        var cell = row.getCell(c);
+        cell.border = box;
+        cell.font = tnr(10);
+        cell.alignment = c === 2 || c === 5 ? { vertical: 'middle', wrapText: true } : center;
+      }
+    }
+    [12, 13, 14, 15].forEach(function (c) { pw.getColumn(c).hidden = true; });
+    var rules = [3, 2, 1].map(function (lvl, i) {
+      return { type: 'expression', priority: i + 1, formulae: ['$O' + first + '=' + lvl],
+               style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
+    });
+    rules.push({ type: 'expression', priority: 4, formulae: ['AND($N' + first + '<>"",INDEX(' + NS + '$F:$F,$N' + first + ')="мин:сек")'], style: { numFmt: XL_TIME } });
+    pw.addConditionalFormatting({ ref: 'H' + first + ':I' + lastRow, rules: rules });
+
+    pw.mergeCells('A' + sig + ':J' + sig);
+    var s = pw.getCell('A' + sig);
+    s.value = 'Спортивный судья по виду испытания (теста)    _________________   __________________________________________ \n' +
+      '                                                                                      (подпись)                                    (Ф.И.О.)\n' +
+      'Главный судья                                                    __________________   ________________________________________\n' +
+      '                                                                                      (подпись)                                      (Ф.И.О.)';
+    s.font = tnr(12); s.alignment = { horizontal: 'left', vertical: 'top', wrapText: true };
+    pw.getRow(sig).height = 91.8;
+    pw.pageSetup = { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+                     printArea: 'A1:J' + sig, printTitlesRow: '9:9', margins: { left: 0.4, right: 0.3, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } };
+  }
+
   // Листы по ступеням: участники ступени; в G1 — выпадающий список нормативов ступени (один выбор на лист),
   // в G — испытание для пола участника, в H — его результат с листа «Результаты» (подсвечен знаком).
   // Служебно: скрытый лист «_списки» (нормативы по ступеням), скрытые столбцы J:K.
   function addStageSheets(wb, list, o) {
-    var lists = wb.addWorksheet('_списки', { state: 'hidden' });
+    var lists = wb.getWorksheet('_списки') || wb.addWorksheet('_списки', { state: 'hidden' });
     var RS = "'Результаты'!", NS = "'Нормативы'!";
     var resHead = RS + '$' + colName(o.R0) + '$1:$' + colName(o.R0 + o.nd - 1) + '$1';
     var order = disciplines.map(function (d) { return String(d.name).trim(); });
