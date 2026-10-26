@@ -516,7 +516,7 @@
     if (nd) {
       // «_знаки»: G:Q — уровень 0–3 (на тех же местах, что результаты), дальше — номер норматива и число
       var hs = wb.addWorksheet('_знаки', { state: 'hidden' });
-      var RS = "'Результаты'!", M0 = R0 + nd + 1, X0 = M0 + nd + 1, T0 = X0 + nd + 1, SEL = T0 + nd + 1;
+      var RS = "'Результаты'!", M0 = R0 + nd + 1, X0 = M0 + nd + 1, T0 = X0 + nd + 1, SEL = T0 + nd + 1, CL0 = SEL + 3;
       var PROT_PICK = "'Протокол'!$D$7";
       var byRow = list.map(function (d) { return d; });
       hs.getCell('A1').value = 'Служебный лист: знак (3 — золото, 2 — серебро, 1 — бронза) для ячеек листа «Результаты». Не редактировать.';
@@ -541,6 +541,12 @@
         // испытание, выбранное в «Протоколе»: в каком столбце оно у участника и сколько таких до этой строки
         var sel = colName(SEL) + r;
         hrow.getCell(SEL).value = { formula: 'IF(' + at('C') + '="","",IFERROR(MATCH(' + PROT_PICK + ',$' + colName(T0) + r + ':$' + colName(T0 + nd - 1) + r + ',0),""))' };
+        // по участнику: класс, пришёл ли, сколько результатов и знаков — для «Анализа» по классам
+        var tRow = '$' + colName(T0) + r + ':$' + colName(T0 + nd - 1) + r, lRow = '$' + colName(R0) + r + ':$' + colName(R0 + nd - 1) + r;
+        hrow.getCell(CL0).value = { formula: 'IF(' + at('C') + '="","",TRIM(' + at('G') + '&""))' };
+        hrow.getCell(CL0 + 1).value = { formula: 'IF(' + at('C') + '="",0,IF(TRIM(' + at('A') + '&"")="",0,1))' };
+        hrow.getCell(CL0 + 2).value = { formula: 'SUMPRODUCT(--(' + tRow + '<>""))' };
+        [3, 2, 1].forEach(function (lvl, q) { hrow.getCell(CL0 + 3 + q).value = { formula: 'COUNTIF(' + lRow + ',' + lvl + ')' }; });
         hrow.getCell(SEL + 1).value = { formula: r === 2 ? 'IF(' + sel + '="",0,1)' : 'IF(' + sel + '="",' + colName(SEL + 1) + (r - 1) + ',' + colName(SEL + 1) + (r - 1) + '+1)' };
       }
       var lastCol = colName(R0 + nd - 1);
@@ -554,7 +560,7 @@
       ws.autoFilter = { from: 'A1', to: lastCol + '1' };
     }
     if (nd) {
-      var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, nd: nd, nlist: nlist, list: list };
+      var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, CL0: CL0, nd: nd, nlist: nlist, list: list };
       var tests = testList(hx);
       addAnalysisSheet(aw, tests, hx);
       addProtocolSheet(wb, pw, tests, hx);
@@ -620,6 +626,39 @@
     aw.addRow([]);
     aw.addRow([]);
     aw.getCell('A' + (tr + 2)).value = '«Сдавали» — у скольких участников есть результат; «Сдали на знак» — золото, серебро и бронза вместе. Считается само по листу «Результаты».';
+    addClassAnalysis(aw, tr + 5, hx);
+  }
+
+  // «Анализ» по классам: сколько человек в списке, пришли, сдавали нормативы, получили знаки
+  function addClassAnalysis(aw, top, hx) {
+    var Z = "'_знаки'!", last = hx.rows;
+    var col = function (k) { var c = colName(hx.CL0 + k); return Z + '$' + c + '$2:$' + c + '$' + last; };
+    var classes = [];
+    hx.list.forEach(function (d) { var c = classOf(d); if (c && classes.indexOf(c) === -1) classes.push(c); });
+    classes.sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0) || (a < b ? -1 : a > b ? 1 : 0); });
+    var t = aw.getRow(top);
+    t.getCell(1).value = 'По классам';
+    t.font = { bold: true, size: 13 };
+    var h = aw.getRow(top + 1);
+    h.values = ['Класс', 'В списке', 'Пришли', 'Сдавали', 'Сдали на знак', 'Золото', 'Серебро', 'Бронза'];
+    h.font = { bold: true };
+    var fills = { 6: 'FFFFD966', 7: 'FFD9D9D9', 8: 'FFF4B183' };
+    for (var c = 1; c <= 8; c++) h.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fills[c] || 'FFEEF1F6' } };
+    classes.forEach(function (cl, i) {
+      var r = top + 2 + i, A = '$A' + r, row = aw.getRow(r);
+      row.getCell(1).value = cl;
+      row.getCell(2).value = { formula: 'COUNTIF(' + col(0) + ',' + A + ')' };
+      row.getCell(3).value = { formula: 'COUNTIFS(' + col(0) + ',' + A + ',' + col(1) + ',1)' };
+      row.getCell(4).value = { formula: 'COUNTIFS(' + col(0) + ',' + A + ',' + col(2) + ',">0")' };
+      row.getCell(5).value = { formula: 'SUMPRODUCT((' + col(0) + '=' + A + ')*((' + col(3) + '+' + col(4) + '+' + col(5) + ')>0))' };
+      [3, 4, 5].forEach(function (k, q) { row.getCell(6 + q).value = { formula: 'SUMIFS(' + col(k) + ',' + col(0) + ',' + A + ')' }; });
+      row.getCell(4).font = { bold: true };
+    });
+    var tr = top + 2 + classes.length + 1, tot = aw.getRow(tr), end = tr - 2;
+    tot.getCell(1).value = 'Итого';
+    for (var k = 2; k <= 8; k++) tot.getCell(k).value = { formula: 'SUM(' + colName(k) + (top + 2) + ':' + colName(k) + end + ')' };
+    tot.font = { bold: true };
+    aw.getCell('A' + (tr + 2)).value = '«Сдавали» — у скольких человек есть хотя бы один результат; «Сдали на знак» — сколько человек получили хотя бы один знак; золото, серебро и бронза — сколько всего таких результатов в классе.';
   }
 
   var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
