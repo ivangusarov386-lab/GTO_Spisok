@@ -739,7 +739,7 @@
     }
     [12, 13, 14, 15].forEach(function (c) { pw.getColumn(c).hidden = true; });
     var rules = [3, 2, 1].map(function (lvl, i) {
-      return { type: 'expression', priority: i + 1, formulae: ['$O' + first + '=' + lvl],
+      return { type: 'expression', priority: i + 1, formulae: ['AND($H' + first + '<>"",$O' + first + '=' + lvl + ')'],   // стёрли результат — цвет уходит
                style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
     });
     pw.addConditionalFormatting({ ref: 'H' + first + ':H' + lastRow, rules: rules });
