@@ -488,15 +488,15 @@
     // Лист «Результаты»: только видимые столбцы. Знак считает скрытый лист «_знаки» по номеру строки
     // (INDEX(...;ROW())), поэтому подсветка работает и для участников, добавленных вручную —
     // в конец или вставкой строки в середину — на XL_ROWS строк вперёд.
-    var nd = disciplines.length, R0 = 7;
+    var nd = disciplines.length, R0 = 8;   // G — «Приход», с H — результаты
     var rows = Math.max(XL_ROWS, list.length + XL_ROWS);
-    var head = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс'].concat(disciplines.map(function (d) { return d.name; }));
+    var head = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс', 'Приход'].concat(disciplines.map(function (d) { return d.name; }));
     ws.getRow(1).values = head;
     ws.getRow(1).font = bold;
     for (var c = 1; c <= head.length; c++) ws.getRow(1).getCell(c).fill = headFill;
     list.forEach(function (d, i) {
       var r = i + 2, row = ws.getRow(r);
-      row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d)];
+      row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d), isHere(d) ? '✓' : null];
       for (var j = 0; j < nd; j++) {
         var n = normOf(d, j), cell = row.getCell(R0 + j);
         var sec = n && n.fmt === 'мин:сек' && has(d.res[j]) ? compareValue(d.res[j], n.fmt) : null;
@@ -505,7 +505,10 @@
       }
     });
     for (var rr = 2; rr <= rows; rr++) for (var jj = 0; jj < nd; jj++) ws.getRow(rr).getCell(R0 + jj).alignment = { horizontal: 'center' };
-    [6, 34, 15, 22, 10, 8].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+    [6, 34, 15, 22, 10, 8, 9].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+    ws.getColumn(7).alignment = { horizontal: 'center' };
+    ws.getColumn(7).font = { bold: true, color: { argb: 'FF15803D' } };
+    ws.getCell('G1').font = bold;
     for (var k = 0; k < nd; k++) ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
 
     if (nd) {
@@ -587,9 +590,9 @@
     Object.keys(stages).sort(function (a, b) { return romanToInt(a) - romanToInt(b); }).forEach(function (st) {
       var ws = wb.addWorksheet((st + ' ступень').slice(0, 31), { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
       var first = (cols[st] || [])[0] || '';
-      ws.getRow(1).values = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс', first, 'Результат', '', 'норматив № (служ.)', 'знак (служ.)'];
+      ws.getRow(1).values = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс', first, 'Результат', 'Приход', 'норматив № (служ.)', 'знак (служ.)'];
       ws.getRow(1).font = { bold: true };
-      for (var c = 1; c <= 8; c++) ws.getRow(1).getCell(c).fill = o.headFill;
+      for (var c = 1; c <= 9; c++) ws.getRow(1).getCell(c).fill = o.headFill;
       var pick = ws.getCell('G1');
       pick.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
       pick.border = { top: { style: 'medium', color: { argb: 'FFE0A800' } }, left: { style: 'medium', color: { argb: 'FFE0A800' } },
@@ -603,6 +606,9 @@
         var r = i + 2, d = it.d, row = ws.getRow(r);
         var j0 = order.indexOf(first), n0 = j0 === -1 ? null : normOf(d, j0);
         row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d)];
+        row.getCell(9).value = isHere(d) ? '✓' : null;
+        row.getCell(9).alignment = { horizontal: 'center' };
+        row.getCell(9).font = { bold: true, color: { argb: 'FF15803D' } };
         row.getCell(10).value = { formula: 'IFERROR(MATCH(UPPER(LEFT(TRIM($D' + r + '),FIND(" ",TRIM($D' + r + ')&" ")-1))&"|"&LOWER(TRIM($E' + r + '))&"|"&LOWER(TRIM($G$1)),' + NS + '$J:$J,0),"")', result: '' };
         row.getCell(7).value = { formula: 'IF($J' + r + '="","",INDEX(' + NS + '$D:$D,$J' + r + ')&"")', result: n0 && n0.name || '' };
         var src = RS + '$' + colName(o.R0) + '$' + it.src + ':$' + colName(o.R0 + o.nd - 1) + '$' + it.src;
@@ -612,7 +618,7 @@
         row.getCell(7).font = { color: { argb: 'FF6B7280' } };
         row.getCell(11).value = { formula: o.lv('H' + r, 'J' + r), result: 0 };
       });
-      [6, 34, 15, 22, 10, 8, 44, 12, 3].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+      [6, 34, 15, 22, 10, 8, 44, 12, 9].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
       [10, 11].forEach(function (c) { ws.getColumn(c).hidden = true; });
       var last = stages[st].length + 1;
       var rules = [3, 2, 1].map(function (lvl, i) {
@@ -622,6 +628,7 @@
       rules.push({ type: 'expression', priority: 4, formulae: ['AND($J2<>"",INDEX(' + NS + '$F:$F,$J2)="мин:сек")'], style: { numFmt: XL_TIME } });
       ws.addConditionalFormatting({ ref: 'H2:H' + last, rules: rules });
       ws.autoFilter = { from: 'A1', to: 'F1' };
+      ws.getCell('I1').font = { bold: true };
     });
   }
 
@@ -630,7 +637,19 @@
     if (!list.length) { toast('Нечего выгружать: список пуст.'); return; }
     var btn = $('xlsBtn');
     btn.disabled = true;
-    loadExcelJS()
+    var stale = false;
+    // Явка и результаты — свежие из таблицы (галочку могли только что снять на другом устройстве)
+    var url = scriptUrl + (scriptUrl.indexOf('?') === -1 ? '?' : '&') + 'view=results';
+    var asked = Date.now();
+    requestJSON(url, 20000)
+      .then(function (res) {
+        if (!res || !res.ok || !res.disciplines) throw new Error('нет данных');
+        resultsTime = asked;   // отметка, сделанная на «Явке» уже во время запроса, важнее ответа
+        setNorms(res.norms);
+        applyData(res.disciplines, res.data);
+        list = filtered();
+      }, function () { stale = true; refreshMarks(); list = filtered(); })
+      .then(loadExcelJS)
       .then(function (ExcelJS) { return buildWorkbook(ExcelJS, list).xlsx.writeBuffer(); })
       .then(function (buf) {
         var ev = ($('evPill').textContent || '').trim();
@@ -640,7 +659,7 @@
         a.href = url; a.download = name;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-        toast('Скачано: ' + name + ' (' + list.length + ' чел.)');
+        toast('Скачано: ' + name + ' (' + list.length + ' чел.)' + (stale ? '. Нет связи с таблицей — явка и результаты на момент последнего обновления страницы' : ''));
       })
       .catch(function (err) { toast('Не получилось сделать Excel: ' + (err && err.message || err)); })
       .then(function () { btn.disabled = false; });
