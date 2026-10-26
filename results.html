@@ -429,6 +429,7 @@
   function colName(c) { var s = ''; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; } return s; }
   // «мин:сек» в Excel — значение времени с форматом [h]:mm: на экране 12:40, набранное «12:40» читается так же
   var XL_TIME = '[h]:mm';
+  var XL_ROWS = 300;  // столько строк под участников, добавленных вручную, подсвечиваются в Excel
   function toXlTime(sec) { return sec / 1440; }
   // Значение для ячейки Excel: числа — числами (5,3 → 5.3; «6:20» → 6.20), остальное — текстом
   function xlValue(v) {
@@ -484,51 +485,60 @@
     var note = nw.addRow(['Время длинного бега — минуты:секунды, например 12:40. Пороги можно править — цвета на листе «Результаты» пересчитаются.']);
     nw.mergeCells(note.number, 1, note.number, 9);
 
-    // Лист «Результаты»: видимые столбцы + скрытые служебные (номер норматива и уровень знака)
-    var nd = disciplines.length, R0 = 7, M0 = R0 + nd + 1, L0 = M0 + nd;
+    // Лист «Результаты»: только видимые столбцы. Знак считает скрытый лист «_знаки» по номеру строки
+    // (INDEX(...;ROW())), поэтому подсветка работает и для участников, добавленных вручную —
+    // в конец или вставкой строки в середину — на XL_ROWS строк вперёд.
+    var nd = disciplines.length, R0 = 7;
+    var rows = Math.max(XL_ROWS, list.length + XL_ROWS);
     var head = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс'].concat(disciplines.map(function (d) { return d.name; }));
     ws.getRow(1).values = head;
     ws.getRow(1).font = bold;
     for (var c = 1; c <= head.length; c++) ws.getRow(1).getCell(c).fill = headFill;
-    for (var j = 0; j < nd; j++) { ws.getRow(1).getCell(M0 + j).value = 'служ.'; ws.getRow(1).getCell(L0 + j).value = 'служ.'; }
     list.forEach(function (d, i) {
       var r = i + 2, row = ws.getRow(r);
       row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d)];
       for (var j = 0; j < nd; j++) {
-        var n = normOf(d, j), x = colName(R0 + j) + r, m = colName(M0 + j) + r;
-        var cell = row.getCell(R0 + j);
+        var n = normOf(d, j), cell = row.getCell(R0 + j);
         var sec = n && n.fmt === 'мин:сек' && has(d.res[j]) ? compareValue(d.res[j], n.fmt) : null;
         if (sec !== null) { cell.value = toXlTime(sec); cell.numFmt = XL_TIME; }
         else cell.value = xlValue(d.res[j]);
-        cell.alignment = { horizontal: 'center' };
-        row.getCell(M0 + j).value = {
-          formula: 'IFERROR(MATCH(UPPER(LEFT(TRIM($D' + r + '),FIND(" ",TRIM($D' + r + ')&" ")-1))&"|"&LOWER(TRIM($E' + r + '))&"|"&LOWER(TRIM(' + colName(R0 + j) + '$1)),' + N + '$J:$J,0),"")',
-          result: n ? normRow[n.key] : '' };
-        var V = 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",' + xlSeconds(x) + ',' + x + ')';
-        var T = function (col) { return 'INDEX(' + N + '$' + col + ':$' + col + ',' + m + ')'; };
-        var cmp = function (col, op) { return 'AND(' + T(col) + '<>"",' + V + op + T(col) + ')'; };
-        var lv = function (op) { return 'IF(' + cmp('M', op) + ',3,IF(' + cmp('L', op) + ',2,IF(' + cmp('K', op) + ',1,0)))'; };
-        row.getCell(L0 + j).value = {
-          formula: 'IF(OR(' + m + '="",NOT(ISNUMBER(' + x + '))),0,IF(INDEX(' + N + '$E:$E,' + m + ')="больше",' + lv('>=') + ',' + lv('<=') + '))',
-          result: has(d.res[j]) ? badgeLevel(d, j) : 0 };
       }
     });
+    for (var rr = 2; rr <= rows; rr++) for (var jj = 0; jj < nd; jj++) ws.getRow(rr).getCell(R0 + jj).alignment = { horizontal: 'center' };
     [6, 34, 15, 22, 10, 8].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
-    for (var k = 0; k < nd; k++) {
-      ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
-      ws.getColumn(M0 + k).hidden = true;
-      ws.getColumn(L0 + k).hidden = true;
-    }
-    if (nd && list.length) {
-      var last = list.length + 1;
+    for (var k = 0; k < nd; k++) ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
+
+    if (nd) {
+      // «_знаки»: G:Q — уровень 0–3 (на тех же местах, что результаты), дальше — номер норматива и число
+      var hs = wb.addWorksheet('_знаки', { state: 'hidden' });
+      var RS = "'Результаты'!", M0 = R0 + nd + 1, X0 = M0 + nd + 1;
+      var byRow = list.map(function (d) { return d; });
+      hs.getCell('A1').value = 'Служебный лист: знак (3 — золото, 2 — серебро, 1 — бронза) для ячеек листа «Результаты». Не редактировать.';
+      for (var r = 2; r <= rows; r++) {
+        var hrow = hs.getRow(r), d = byRow[r - 2];
+        var at = function (col) { return 'INDEX(' + RS + '$' + col + ':$' + col + ',ROW())'; };
+        var stupen = 'UPPER(LEFT(TRIM(' + at('D') + '),FIND(" ",TRIM(' + at('D') + ')&" ")-1))';
+        for (var j = 0; j < nd; j++) {
+          var rc = colName(R0 + j), m = colName(M0 + j) + r, x = colName(X0 + j) + r, raw = at(rc);
+          var n = d ? normOf(d, j) : null;
+          hrow.getCell(M0 + j).value = {
+            formula: 'IF(OR(' + at('B') + '="",' + raw + '=""),"",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at('E') + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
+            result: d && n && has(d.res[j]) ? normRow[n.key] : '' };
+          hrow.getCell(X0 + j).value = {
+            formula: 'IF(' + m + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),"")))))',
+            result: '' };
+          hrow.getCell(R0 + j).value = { formula: levelFormula(x, m), result: d && has(d.res[j]) ? badgeLevel(d, j) : 0 };
+        }
+      }
+      var lastCol = colName(R0 + nd - 1);
       ws.addConditionalFormatting({
-        ref: colName(R0) + '2:' + colName(R0 + nd - 1) + last,
+        ref: colName(R0) + '2:' + lastCol + rows,
         rules: [3, 2, 1].map(function (lvl, i) {
-          return { type: 'expression', priority: i + 1, formulae: [colName(L0) + '2=' + lvl],
+          return { type: 'expression', priority: i + 1, formulae: ['INDEX(\'_знаки\'!$A$1:$' + lastCol + '$' + rows + ',ROW(),COLUMN())=' + lvl],
                    style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
         })
       });
-      ws.autoFilter = { from: 'A1', to: colName(R0 + nd - 1) + '1' };
+      ws.autoFilter = { from: 'A1', to: lastCol + '1' };
     }
     if (nd && list.length) addStageSheets(wb, list, { nd: nd, R0: R0, nlist: nlist, headFill: headFill, lv: levelFormula });
     return wb;
