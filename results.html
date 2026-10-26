@@ -450,7 +450,7 @@
   function buildWorkbook(ExcelJS, list) {
     var wb = new ExcelJS.Workbook();
     wb.calcProperties.fullCalcOnLoad = true;
-    var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: 2, ySplit: 1 }] });
+    var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] });
     var nw = wb.addWorksheet('Нормативы', { views: [{ state: 'frozen', ySplit: 1 }] });
     var N = "'Нормативы'!";
     var bold = { bold: true }, headFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF1F6' } };
@@ -488,15 +488,15 @@
     // Лист «Результаты»: только видимые столбцы. Знак считает скрытый лист «_знаки» по номеру строки
     // (INDEX(...;ROW())), поэтому подсветка работает и для участников, добавленных вручную —
     // в конец или вставкой строки в середину — на XL_ROWS строк вперёд.
-    var nd = disciplines.length, R0 = 8;   // G — «Приход», с H — результаты
+    var nd = disciplines.length, R0 = 8;   // A — «Приход», B:G — участник, с H — результаты
     var rows = Math.max(XL_ROWS, list.length + XL_ROWS);
-    var head = ['№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс', 'Приход'].concat(disciplines.map(function (d) { return d.name; }));
+    var head = ['Приход', '№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс'].concat(disciplines.map(function (d) { return d.name; }));
     ws.getRow(1).values = head;
     ws.getRow(1).font = bold;
     for (var c = 1; c <= head.length; c++) ws.getRow(1).getCell(c).fill = headFill;
     list.forEach(function (d, i) {
       var r = i + 2, row = ws.getRow(r);
-      row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d), isHere(d) ? '✓' : null];
+      row.values = [isHere(d) ? '✓' : null, xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d)];
       for (var j = 0; j < nd; j++) {
         var n = normOf(d, j), cell = row.getCell(R0 + j);
         var sec = n && n.fmt === 'мин:сек' && has(d.res[j]) ? compareValue(d.res[j], n.fmt) : null;
@@ -505,10 +505,10 @@
       }
     });
     for (var rr = 2; rr <= rows; rr++) for (var jj = 0; jj < nd; jj++) ws.getRow(rr).getCell(R0 + jj).alignment = { horizontal: 'center' };
-    [6, 34, 15, 22, 10, 8, 9].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
-    ws.getColumn(7).alignment = { horizontal: 'center' };
-    ws.getColumn(7).font = { bold: true, color: { argb: 'FF15803D' } };
-    ws.getCell('G1').font = bold;
+    [9, 6, 34, 15, 22, 10, 8].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+    ws.getColumn(1).alignment = { horizontal: 'center' };
+    ws.getColumn(1).font = { bold: true, color: { argb: 'FF15803D' } };
+    ws.getCell('A1').font = bold;
     for (var k = 0; k < nd; k++) ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
 
     if (nd) {
@@ -520,12 +520,12 @@
       for (var r = 2; r <= rows; r++) {
         var hrow = hs.getRow(r), d = byRow[r - 2];
         var at = function (col) { return 'INDEX(' + RS + '$' + col + ':$' + col + ',ROW())'; };
-        var stupen = 'UPPER(LEFT(TRIM(' + at('D') + '),FIND(" ",TRIM(' + at('D') + ')&" ")-1))';
+        var stupen = 'UPPER(LEFT(TRIM(' + at('E') + '),FIND(" ",TRIM(' + at('E') + ')&" ")-1))';
         for (var j = 0; j < nd; j++) {
           var rc = colName(R0 + j), m = colName(M0 + j) + r, x = colName(X0 + j) + r, raw = at(rc);
           var n = d ? normOf(d, j) : null;
           hrow.getCell(M0 + j).value = {
-            formula: 'IF(OR(' + at('B') + '="",' + raw + '=""),"",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at('E') + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
+            formula: 'IF(OR(' + at('C') + '="",' + raw + '=""),"",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at('F') + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
             result: d && n && has(d.res[j]) ? normRow[n.key] : '' };
           hrow.getCell(X0 + j).value = {
             formula: 'IF(' + m + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),"")))))',
