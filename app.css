@@ -636,3 +636,6 @@
   .datebar .iconbtn { width: 40px; height: 40px; }
   .datebar .iconbtn:disabled { opacity: .4; cursor: default; }
   #evAppend.spin svg, #evRenumber.spin svg { animation: spin .8s linear infinite; }
+  .datebar .tobase { height: 40px; padding: 0 12px; flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  .datebar .tobase.busy { opacity: .6; cursor: progress; }
+  @media (max-width: 560px) { .datebar .tobase { width: 40px; padding: 0; justify-content: center; } .datebar .tobase .tbl { display: none; } }

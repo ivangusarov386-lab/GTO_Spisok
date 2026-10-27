@@ -94,6 +94,10 @@
         <button type="button" class="iconbtn" id="evAppend" title="Догрузить новых участников этой даты из регистрации" aria-label="Догрузить новых участников из регистрации">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
         </button>
+        <button type="button" class="btn tobase" id="toBase" title="Отправить всех участников протокола в «Базу сдавших» (дописываются ниже, ничего не перезаписывается)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+          <span class="tbl">В базу</span>
+        </button>
         <button type="button" class="iconbtn" id="evRenumber" title="Упорядочить по алфавиту и перенумеровать 1, 2, 3…" aria-label="Упорядочить по алфавиту и перенумеровать">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 16l4 4 4-4M7 20V4"/><path d="M14 4h6l-6 7h6"/><path d="M14 20l3-7 3 7M15 18h4"/></svg>
         </button>
@@ -598,12 +602,13 @@
       });
   }
 
-  function loadEvent(mode) {
+  function loadEvent(mode, force) {
     var name = evSelect.value;
     if (!name) return;
-    if (mode === 'replace' && !window.confirm(
-      'Загрузить «' + name + '»?\n\nТекущий протокол будет сохранён копией в архив на Google Диске, ' +
-      'затем «Список», явка и результаты очистятся и загрузятся участники этой даты.')) return;
+    if (mode === 'replace' && !force && !window.confirm(
+      'Загрузить «' + name + '»?\n\n«Список», явка и результаты очистятся и загрузятся участники этой даты.\n' +
+      'Текущий протокол сначала отправьте в «Базу сдавших» кнопкой «В базу».')) return;
+    var notSent = null;
     var started = Date.now();
     evLoadBtn.disabled = evAppendBtn.disabled = evSelect.disabled = true;
     if (mode === 'replace') evLoadBtn.textContent = 'Загружаем…';
@@ -618,9 +623,10 @@
     requestJSON(scriptUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'loadDate', sheet: name, mode: mode })
+      body: JSON.stringify({ action: 'loadDate', sheet: name, mode: mode, force: !!force })
     }, LOAD_DATE_TIMEOUT_MS)
       .then(function (res) {
+        if (res && !res.ok && res.notSent) { notSent = res.event || 'текущей даты'; return null; }
         if (!res || !res.ok) throw scriptError((res && res.error) || 'скрипт вернул ok: false');
         return res;
       })
@@ -633,14 +639,14 @@
         }, function () { throw err; });
       })
       .then(function (res) {
+        if (!res) return;                                      // протокол не отправлен в базу — спросим ниже
         if (mode === 'replace') {
           // Новый список — старые данные и память браузера больше не нужны
           data = [];
           try { localStorage.removeItem(CACHE_KEY); localStorage.removeItem('gto_cache_results_v1'); } catch (e) {}
           searchEl.value = '';
           render();
-          toast('Загружена дата «' + name + '»' + (res.loaded != null ? ': ' + res.loaded + ' участников' : '') +
-            (res.archive ? '. Прежний протокол — в архиве' + (res.archive.full === false ? ' (Google Диск → «Мой диск»)' : ' (в той же папке Диска)') + ': «' + res.archive.name + '»' : ''), true);
+          toast('Загружена дата «' + name + '»' + (res.loaded != null ? ': ' + res.loaded + ' участников' : ''), true);
         } else {
           toast('«' + name + '»: добавлено ' + res.added + ', уже были в списке ' + res.skipped, true);
         }
@@ -661,9 +667,43 @@
         pendingSaves--;
         writeGen++;
         afterSavesSettled();
+        if (notSent && window.confirm('Протокол «' + notSent + '» ещё не отправлен в «Базу сдавших».\n' +
+          'Если загрузить новую дату, его участники и результаты пропадут.\n\n' +
+          'Отмена — сначала нажмите «В базу».\nОК — всё равно загрузить «' + name + '».')) loadEvent('replace', true);
       });
   }
   evLoadBtn.addEventListener('click', function () { loadEvent('replace'); });
+
+  // «В базу»: все участники протокола дописываются в Google Таблицу «База сдавших» (ниже прежних записей)
+  var toBaseBtn = document.getElementById('toBase');
+  function sendToBase(again) {
+    if (!again && !window.confirm('Отправить всех участников протокола «' + (currentEventName || '—') + '» в «Базу сдавших»?\n\n' +
+      'Строки допишутся ниже уже записанных, ничего не перезаписывается. Дата сдачи — из названия даты.')) return;
+    toBaseBtn.disabled = true;
+    toBaseBtn.classList.add('busy');
+    var askAgain = null;
+    requestJSON(scriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'toBase', again: !!again })
+    }, LOAD_DATE_TIMEOUT_MS)
+      .then(function (res) {
+        if (res && !res.ok && res.already) { askAgain = res; return; }
+        if (!res || !res.ok) throw scriptError((res && res.error) || 'скрипт вернул ok: false');
+        toast('В «Базу сдавших» записано ' + res.count + ' чел. с датой ' + res.date + '.', true);
+      })
+      .catch(function (err) {
+        eventError('Не отправлено в базу: ' + errText(err) +
+          (err && err.definite ? '' : '. Если связь оборвалась, проверьте «Базу сдавших» перед повторной отправкой — иначе строки задвоятся.'));
+      })
+      .then(function () {
+        toBaseBtn.disabled = false;
+        toBaseBtn.classList.remove('busy');
+        if (askAgain && window.confirm('Протокол «' + askAgain.event + '» уже отправлен в «Базу сдавших» ' + askAgain.at +
+          ' (' + askAgain.count + ' чел.).\n\nОтправить ещё раз? В базе появятся повторные строки.')) sendToBase(true);
+      });
+  }
+  toBaseBtn.addEventListener('click', function () { sendToBase(false); });
   evAppendBtn.addEventListener('click', function () { loadEvent('append'); });
 
   // Упорядочить «Список» по ФИО и перенумеровать 1…N (явка и результаты переезжают вместе с участниками)

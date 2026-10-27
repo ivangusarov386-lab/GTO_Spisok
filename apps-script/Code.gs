@@ -21,6 +21,9 @@ var COL_LETTER = 19;    // S — буква класса
 var REG_SPREADSHEET_ID = '1jjEFzNrZcsTDyyhd05oN8iIvo7scwmK0E57YhGEnNL8';
 var REG_SKIP_SHEETS = ['основной'];          // шаблон, не дата
 var CONTROL_SHEET = 'управление';            // сюда пишется, какая дата загружена
+// Google Таблица «База сдавших»: кнопка «В базу» дописывает туда всех участников текущей даты
+var BASE_SPREADSHEET_ID = '1bXuLV58UVociZkxOQHipm1xCkaPVrBiMhicIB9QgqEg';
+var BASE_SHEET = 'База сдавших';
 // Листы нормативов: при загрузке новой даты очищаются введённые результаты (номера в A и формулы остаются)
 var RESULT_SHEETS = ['отжимание', 'подтягивание', 'прыжки', 'пресс', 'наклон', 'челнок 3х10',
                      '30 метров', 'длинная', 'метание', 'стрельба', '60м'];
@@ -62,9 +65,10 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
     var params = JSON.parse(e.postData.contents);
-    lock.waitLock(params.action === 'loadDate' || params.action === 'import' ? 30000 : 10000);
+    lock.waitLock(params.action === 'loadDate' || params.action === 'import' || params.action === 'toBase' ? 30000 : 10000);
     if (params.action === 'add') return jsonOut(addParticipant(params));
-    if (params.action === 'loadDate') return jsonOut(loadDate(params.sheet, params.mode));
+    if (params.action === 'loadDate') return jsonOut(loadDate(params.sheet, params.mode, params.force));
+    if (params.action === 'toBase') return jsonOut(sendToBase(params.again));
     if (params.action === 'renumber') return jsonOut(sortAndRenumber());
     if (params.action === 'import') return jsonOut(importResults(params));
     if (params.action && params.action !== 'mark') {
@@ -239,7 +243,7 @@ function readRegistration(sh) {
 }
 
 // mode: 'replace' — архив + очистка + загрузка; 'append' — дописать тех, кого ещё нет (по УИН)
-function loadDate(name, mode) {
+function loadDate(name, mode, force) {
   name = String(name || '');
   var reg = SpreadsheetApp.openById(REG_SPREADSHEET_ID);
   var src = reg.getSheetByName(name);
@@ -258,7 +262,12 @@ function loadDate(name, mode) {
   // Новая дата: алфавитный порядок и сквозные номера 1, 2, 3…
   people.forEach(function (p, i) { p.num = i + 1; });
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var archive = hasParticipants(sheet) ? archiveCopy(ss) : null;
+  // Вместо архива — «База сдавших»: не даём стереть протокол, который туда ещё не отправили
+  if (hasParticipants(sheet) && !sentToBase() && !force) {
+    return { ok: false, notSent: true, event: currentEvent(),
+             error: 'протокол «' + (currentEvent() || 'текущей даты') + '» ещё не отправлен в «Базу сдавших» — сначала нажмите «В базу»' };
+  }
+  var archive = null;
   clearInputs(sheet, 2, 1, COL_LETTER);           // «Список»: A:S, формулы остаются
   ss.getSheets().forEach(function (sh) {
     if (RESULT_SHEETS.indexOf(normName(sh.getName())) === -1) return;
@@ -271,6 +280,94 @@ function loadDate(name, mode) {
   setControl(name, people.length, archive);
   SpreadsheetApp.flush();
   return { ok: true, mode: 'replace', loaded: people.length, archive: archive, event: name };
+}
+
+// ===================== «База сдавших» =====================
+// «В базу» дописывает ВСЕХ участников «Списка» ниже уже записанных строк (ничего не перезаписывает).
+// Дата сдачи — из названия даты в регистрации («23.11.26 (3-4 классы)» → 23.11.2026).
+function baseState() {
+  try { return JSON.parse(PropertiesService.getDocumentProperties().getProperty('base_sent') || '{}'); } catch (e) { return {}; }
+}
+function sentToBase() { var st = baseState(); return !!st.event && st.event === currentEvent(); }
+
+function eventDate(name) {
+  var m = String(name || '').match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})/);
+  if (!m) return null;
+  var y = +m[3]; if (y < 100) y += 2000;
+  return new Date(y, +m[2] - 1, +m[1]);
+}
+
+function sendToBase(again) {
+  var event = currentEvent();
+  var date = eventDate(event);
+  if (!date) return { ok: false, error: 'в названии загруженной даты («' + (event || '—') + '») не найдена дата вида 23.11.26' };
+  var st = baseState();
+  if (st.event === event && !again) return { ok: false, already: true, at: st.at, count: st.count, event: event };
+
+  var sheet = getSheet();
+  var last = sheet.getLastRow();
+  if (last < 2) return { ok: false, error: 'в «Списке» нет участников' };
+  var shown = sheet.getRange(1, 1, last, COL_LETTER).getDisplayValues();
+  var head = shown[0].map(normKeyPart);
+  var people = shown.slice(1).filter(function (r) { return String(r[COL_FIO - 1]).trim() !== ''; });
+  if (!people.length) return { ok: false, error: 'в «Списке» нет участников' };
+
+  var base = SpreadsheetApp.openById(BASE_SPREADSHEET_ID);
+  var bs = base.getSheetByName(BASE_SHEET) || base.getSheets()[0];
+  var bw = bs.getLastColumn();
+  var bhead = bs.getRange(1, 1, 1, bw).getDisplayValues()[0].map(normKeyPart);
+  var asNumber = function (v) {
+    var t = String(v).trim();
+    return /^-?\d+([.,]\d+)?$/.test(t) ? Number(t.replace(',', '.')) : t;
+  };
+  var rows = people.map(function (r) {
+    var cls = (String(r[COL_CLASS - 1]).trim() + ' ' + String(r[COL_LETTER - 1]).trim().toUpperCase()).trim();
+    return bhead.map(function (h) {
+      if (h === 'дата сдачи' || h === 'дата') return date;
+      if (h === 'фио') return String(r[COL_FIO - 1]).replace(/\s+/g, ' ').trim();
+      if (h === 'уин') return String(r[COL_UIN - 1]).trim();
+      if (h === 'ступень') return String(r[COL_STUPEN - 1]).trim();
+      if (h === 'пол') return String(r[COL_POL - 1]).trim();
+      if (h === 'класс') return cls;
+      var j = head.indexOf(h);
+      if (j >= COL_RES_FIRST - 1 && j <= COL_RES_LAST - 1) return asNumber(r[j]);
+      return '';
+    });
+  });
+
+  var start = Math.max(bs.getLastRow(), 1) + 1;              // строго ниже последней записи
+  var need = start + rows.length - 1;
+  if (need > bs.getMaxRows()) bs.insertRowsAfter(bs.getMaxRows(), need - bs.getMaxRows());
+  var uinCol = bhead.indexOf('уин');
+  var dateCol = bhead.indexOf('дата сдачи') !== -1 ? bhead.indexOf('дата сдачи') : bhead.indexOf('дата');
+  if (uinCol !== -1) bs.getRange(start, uinCol + 1, rows.length, 1).setNumberFormat('@');
+  if (dateCol !== -1) bs.getRange(start, dateCol + 1, rows.length, 1).setNumberFormat('dd.mm.yyyy');
+  bs.getRange(start, 1, rows.length, bw).setValues(rows);
+  SpreadsheetApp.flush();
+
+  var at = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
+  PropertiesService.getDocumentProperties().setProperty('base_sent', JSON.stringify({ event: event, at: at, count: rows.length }));
+  var ctl = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONTROL_SHEET);
+  if (ctl) ctl.getRange(4, 1, 1, 2).setValues([['В базу отправлено', at + ' — ' + rows.length + ' чел.']]);
+  return { ok: true, count: rows.length, event: event, date: Utilities.formatDate(date, Session.getScriptTimeZone(), 'dd.MM.yyyy'), at: at };
+}
+
+function menuToBase() {
+  var ui = SpreadsheetApp.getUi();
+  var event = currentEvent();
+  var st = baseState();
+  var again = false;
+  if (st.event === event) {
+    if (ui.alert('В базу', 'Протокол «' + event + '» уже отправлен в «Базу сдавших» ' + st.at + ' (' + st.count + ' чел.).\n' +
+      'Отправить ещё раз? В базе появятся повторные строки.', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+    again = true;
+  } else if (ui.alert('В базу', 'Отправить всех участников протокола «' + event + '» в «Базу сдавших»?\n' +
+      'Строки допишутся ниже уже записанных, ничего не перезаписывается.', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  var res;
+  try { res = sendToBase(again); } finally { lock.releaseLock(); }
+  ui.alert(res.ok ? 'Готово: в «Базу сдавших» записано ' + res.count + ' чел. с датой ' + res.date + '.' : 'Не отправлено: ' + res.error);
 }
 
 // ===================== Загрузка выгрузки с другой площадки =====================
@@ -563,7 +660,7 @@ function setControl(name, count, archive) {
   if (!sh) return;
   var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
   sh.getRange(1, 1, 2, 2).setValues([['Загруженная дата', name], ['Обновлено', stamp]]);
-  if (count !== null) sh.getRange(3, 1, 1, 2).setValues([['Участников', count]]);
+  if (count !== null) sh.getRange(3, 1, 2, 2).setValues([['Участников', count], ['В базу отправлено', 'ещё нет']]);
   if (archive) sh.getRange(4, 1, 1, 2).setValues([['Архив предыдущей', '=HYPERLINK("' + archive.url + '","' + archive.name.replace(/"/g, "'") + '")']]);
 }
 
@@ -908,6 +1005,7 @@ function onOpen() {
   if (/архив/i.test(ss.getName())) return; // в архивных копиях загрузка не нужна
   SpreadsheetApp.getUi().createMenu('ГТО')
     .addItem('Загрузить дату из регистрации…', 'showLoadDialog')
+    .addItem('В базу: отправить протокол в «Базу сдавших»', 'menuToBase')
     .addItem('Подсветка знаков: создать / обновить', 'menuSetupBadges')
     .addItem('Упорядочить по алфавиту и перенумеровать', 'menuRenumber')
     .addToUi();
@@ -943,26 +1041,27 @@ function showLoadDialog() {
     '<div style="font-family:Arial,sans-serif;font-size:14px">' +
     '<p>Сейчас загружено: <b>' + esc(info.current || '—') + '</b></p>' +
     '<select id="d" style="width:100%;padding:6px;font-size:14px">' + opts + '</select>' +
-    '<p style="color:#666;font-size:12px">«Загрузить» — копия протокола уйдёт в архив на Google Диск, ' +
-    'затем «Список», явка и результаты на листах нормативов очистятся и загрузятся участники выбранной даты.<br>' +
+    '<p style="color:#666;font-size:12px">«Загрузить» — «Список», явка и результаты на листах нормативов очистятся ' +
+    'и загрузятся участники выбранной даты. Сначала отправьте текущий протокол в «Базу сдавших» (меню ГТО → В базу).<br>' +
     '«Догрузить новых» — добавит только тех, кого ещё нет в «Списке» (по УИН), ничего не очищая.</p>' +
     '<button onclick="go(\'replace\')" style="padding:8px 12px">Загрузить</button> ' +
     '<button onclick="go(\'append\')" style="padding:8px 12px">Догрузить новых</button>' +
     '<p id="m" style="margin-top:12px"></p></div>' +
-    '<script>function go(mode){var d=document.getElementById("d").value,m=document.getElementById("m");' +
-    'if(mode==="replace"&&!confirm("Загрузить «"+d+"»?\\nТекущий протокол уйдёт в архив, список и результаты очистятся."))return;' +
+    '<script>function go(mode,force){var d=document.getElementById("d").value,m=document.getElementById("m");' +
+    'if(mode==="replace"&&!force&&!confirm("Загрузить «"+d+"»?\\nСписок, явка и результаты очистятся."))return;' +
     'm.textContent="Загружаем…";document.querySelectorAll("button").forEach(function(b){b.disabled=true});' +
-    'google.script.run.withSuccessHandler(function(r){m.textContent=r.ok?(r.mode==="append"?"Добавлено: "+r.added+", уже были: "+r.skipped:"Загружено участников: "+r.loaded+(r.archive?". Архив: "+r.archive.name:"")):("Ошибка: "+r.error);' +
-    'document.querySelectorAll("button").forEach(function(b){b.disabled=false})})' +
+    'google.script.run.withSuccessHandler(function(r){document.querySelectorAll("button").forEach(function(b){b.disabled=false});' +
+    'if(!r.ok&&r.notSent){m.textContent="";if(confirm("Протокол «"+r.event+"» ещё не отправлен в «Базу сдавших».\\nЕсли загрузить новую дату, его данные пропадут.\\n\\nВсё равно загрузить?"))go(mode,true);return;}' +
+    'm.textContent=r.ok?(r.mode==="append"?"Добавлено: "+r.added+", уже были: "+r.skipped:"Загружено участников: "+r.loaded):("Ошибка: "+r.error)})' +
     '.withFailureHandler(function(e){m.textContent="Ошибка: "+e.message;document.querySelectorAll("button").forEach(function(b){b.disabled=false})})' +
-    '.menuLoad(d,mode)}</script>';
+    '.menuLoad(d,mode,!!force)}</script>';
   SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(html).setWidth(460).setHeight(330), 'Загрузка даты из регистрации');
 }
 
-function menuLoad(name, mode) {
+function menuLoad(name, mode, force) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
-  try { return loadDate(name, mode); } finally { lock.releaseLock(); }
+  try { return loadDate(name, mode, force); } finally { lock.releaseLock(); }
 }
 
 // Запустите один раз из редактора, чтобы выдать скрипту разрешения
