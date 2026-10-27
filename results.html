@@ -460,9 +460,13 @@
     opts = opts || {};
     var wb = new ExcelJS.Workbook();
     wb.calcProperties.fullCalcOnLoad = true;
-    var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] });
-    var aw = wb.addWorksheet('Анализ', { views: [{ state: 'frozen', ySplit: 1 }] });
-    var pw = wb.addWorksheet('Протокол');
+    var blank = !!opts.blank;   // пустой бланк для другой площадки: без «Прихода», «Класса», «Анализа» и «Протокола»
+    // Столбцы «Результатов»: в выгрузке A — «Приход», B:G — участник, с H — результаты; в бланке A:E — участник, с F — результаты
+    var C = blank ? { num: 'A', fio: 'B', uin: 'C', st: 'D', pol: 'E' }
+                  : { pres: 'A', num: 'B', fio: 'C', uin: 'D', st: 'E', pol: 'F', cls: 'G' };
+    var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: blank ? 2 : 3, ySplit: 1 }] });
+    var aw = blank ? null : wb.addWorksheet('Анализ', { views: [{ state: 'frozen', ySplit: 1 }] });
+    var pw = blank ? null : wb.addWorksheet('Протокол');
     var nw = wb.addWorksheet('Нормативы', { views: [{ state: 'frozen', ySplit: 1 }] });
     var N = "'Нормативы'!";
     var bold = { bold: true }, headFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEF1F6' } };
@@ -500,9 +504,10 @@
     // Лист «Результаты»: только видимые столбцы. Знак считает скрытый лист «_знаки» по номеру строки
     // (INDEX(...;ROW())), поэтому подсветка работает и для участников, добавленных вручную —
     // в конец или вставкой строки в середину — на XL_ROWS строк вперёд.
-    var nd = disciplines.length, R0 = 8;   // A — «Приход», B:G — участник, с H — результаты
+    var nd = disciplines.length, R0 = blank ? 6 : 8;
     var rows = Math.max(XL_ROWS, list.length + XL_ROWS);
-    var head = ['Приход', '№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс'].concat(disciplines.map(function (d) { return d.name; }));
+    var head = (blank ? ['№', 'ФИО', 'УИН', 'Ступень', 'Пол'] : ['Приход', '№', 'ФИО', 'УИН', 'Ступень', 'Пол', 'Класс'])
+      .concat(disciplines.map(function (d) { return d.name; }));
     ws.getRow(1).values = head;
     ws.getRow(1).font = bold;
     for (var c = 1; c <= head.length; c++) ws.getRow(1).getCell(c).fill = headFill;
@@ -517,11 +522,13 @@
       }
     });
     for (var rr = 2; rr <= rows; rr++) for (var jj = 0; jj < nd; jj++) ws.getRow(rr).getCell(R0 + jj).alignment = { horizontal: 'center' };
-    [9, 6, 34, 15, 22, 10, 8].forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
-    ws.getColumn(1).alignment = { horizontal: 'center' };
-    ws.getColumn(1).font = { bold: true, color: { argb: 'FF15803D' } };
-    ws.getCell('A1').font = bold;
-    ws.getCell('C1').note = 'Чтобы подсветка знаков не пропала, данные из другого файла вставляйте только значениями: ' +
+    (blank ? [6, 34, 15, 22, 10] : [9, 6, 34, 15, 22, 10, 8]).forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
+    if (!blank) {
+      ws.getColumn(1).alignment = { horizontal: 'center' };
+      ws.getColumn(1).font = { bold: true, color: { argb: 'FF15803D' } };
+      ws.getCell('A1').font = bold;
+    }
+    ws.getCell(C.fio + '1').note = 'Чтобы подсветка знаков не пропала, данные из другого файла вставляйте только значениями: ' +
       'правый клик → Параметры вставки → «Значения» (123) или Ctrl+Alt+V → «значения». Обычная вставка Ctrl+V стирает подсветку в этих ячейках.';
     for (var k = 0; k < nd; k++) ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
 
@@ -535,12 +542,12 @@
       for (var r = 2; r <= rows; r++) {
         var hrow = hs.getRow(r), d = byRow[r - 2];
         var at = function (col) { return 'INDEX(' + RS + '$' + col + ':$' + col + ',ROW())'; };
-        var stupen = 'UPPER(LEFT(TRIM(' + at('E') + '),FIND(" ",TRIM(' + at('E') + ')&" ")-1))';
+        var stupen = 'UPPER(LEFT(TRIM(' + at(C.st) + '),FIND(" ",TRIM(' + at(C.st) + ')&" ")-1))';
         for (var j = 0; j < nd; j++) {
           var rc = colName(R0 + j), m = colName(M0 + j) + r, x = colName(X0 + j) + r, raw = at(rc);
           var n = d ? normOf(d, j) : null;
           hrow.getCell(M0 + j).value = {
-            formula: 'IF(OR(' + at('C') + '="",' + raw + '=""),"",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at('F') + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
+            formula: 'IF(OR(' + at(C.fio) + '="",' + raw + '=""),"",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at(C.pol) + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
             result: d && n && has(d.res[j]) ? normRow[n.key] : '' };
           hrow.getCell(X0 + j).value = {
             formula: 'IF(' + m + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),"")))))',
@@ -550,13 +557,14 @@
           hrow.getCell(T0 + j).value = { formula: 'IF(' + m + '="","",INDEX(' + N + '$D:$D,' + m + ')&"")',
             result: d && n && has(d.res[j]) ? (n.name || String(disciplines[j].name).toLowerCase()) : '' };
         }
+        if (blank) continue;                                  // «Анализа» и «Протокола» в бланке нет
         // испытание, выбранное в «Протоколе»: в каком столбце оно у участника и сколько таких до этой строки
         var sel = colName(SEL) + r;
-        hrow.getCell(SEL).value = { formula: 'IF(' + at('C') + '="","",IFERROR(MATCH(' + PROT_PICK + ',$' + colName(T0) + r + ':$' + colName(T0 + nd - 1) + r + ',0),""))' };
+        hrow.getCell(SEL).value = { formula: 'IF(' + at(C.fio) + '="","",IFERROR(MATCH(' + PROT_PICK + ',$' + colName(T0) + r + ':$' + colName(T0 + nd - 1) + r + ',0),""))' };
         // по участнику: класс, пришёл ли, сколько результатов и знаков — для «Анализа» по классам
         var tRow = '$' + colName(T0) + r + ':$' + colName(T0 + nd - 1) + r, lRow = '$' + colName(R0) + r + ':$' + colName(R0 + nd - 1) + r;
-        hrow.getCell(CL0).value = { formula: 'IF(' + at('C') + '="","",TRIM(' + at('G') + '&""))' };
-        hrow.getCell(CL0 + 1).value = { formula: 'IF(' + at('C') + '="",0,IF(TRIM(' + at('A') + '&"")="",0,1))' };
+        hrow.getCell(CL0).value = { formula: 'IF(' + at(C.fio) + '="","",TRIM(' + at(C.cls) + '&""))' };
+        hrow.getCell(CL0 + 1).value = { formula: 'IF(' + at(C.fio) + '="",0,IF(TRIM(' + at(C.pres) + '&"")="",0,1))' };
         hrow.getCell(CL0 + 2).value = { formula: 'SUMPRODUCT(--(' + tRow + '<>""))' };
         [3, 2, 1].forEach(function (lvl, q) { hrow.getCell(CL0 + 3 + q).value = { formula: 'COUNTIF(' + lRow + ',' + lvl + ')' }; });
         hrow.getCell(SEL + 1).value = { formula: r === 2 ? 'IF(' + sel + '="",0,1)' : 'IF(' + sel + '="",' + colName(SEL + 1) + (r - 1) + ',' + colName(SEL + 1) + (r - 1) + '+1)' };
@@ -571,17 +579,17 @@
       });
       ws.autoFilter = { from: 'A1', to: lastCol + '1' };
     }
-    // Ступень (E) и пол (F) — выпадающими списками, на все строки под участников
+    // Ступень и пол — выпадающими списками, на все строки под участников
     var lists = wb.getWorksheet('_списки') || wb.addWorksheet('_списки', { state: 'hidden' });
     lists.getRow(1).getCell(45).value = 'ступени'; lists.getRow(1).getCell(46).value = 'пол';
     STUPENI.forEach(function (v, i) { lists.getRow(i + 2).getCell(45).value = v; });
     POLY.forEach(function (v, i) { lists.getRow(i + 2).getCell(46).value = v; });
-    ws.dataValidations.add('E2:E' + rows, { type: 'list', allowBlank: true, formulae: ["'_списки'!$AS$2:$AS$" + (STUPENI.length + 1)],
+    ws.dataValidations.add(C.st + '2:' + C.st + rows, { type: 'list', allowBlank: true, formulae: ["'_списки'!$AS$2:$AS$" + (STUPENI.length + 1)],
       showErrorMessage: true, errorStyle: 'warning', errorTitle: 'Ступень', error: 'Выберите ступень из списка' });
-    ws.dataValidations.add('F2:F' + rows, { type: 'list', allowBlank: true, formulae: ["'_списки'!$AT$2:$AT$3"],
+    ws.dataValidations.add(C.pol + '2:' + C.pol + rows, { type: 'list', allowBlank: true, formulae: ["'_списки'!$AT$2:$AT$3"],
       showErrorMessage: true, errorStyle: 'warning', errorTitle: 'Пол', error: 'Выберите пол из списка' });
-    if (nd) {
-      var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, CL0: CL0, nd: nd, nlist: nlist, list: list, blank: !!opts.blank };
+    if (nd && !blank) {
+      var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, CL0: CL0, nd: nd, nlist: nlist, list: list };
       var tests = testList(hx);
       addAnalysisSheet(aw, tests, hx);
       addProtocolSheet(wb, pw, tests, hx);
@@ -611,7 +619,7 @@
     });
     hx.nlist.forEach(function (n) {
       var p = n.key.split('|'), name = n.name || p[2];
-      if (hx.list.length && !stages[p[0]]) return;          // в пустом бланке — все ступени
+      if (!stages[p[0]]) return;
       if (!byName[name]) { byName[name] = { name: name, col: order.indexOf(p[2]), stages: [] }; out.push(byName[name]); }
       if (byName[name].stages.indexOf(p[0]) === -1) byName[name].stages.push(p[0]);
     });
@@ -717,7 +725,7 @@
         showErrorMessage: true, errorTitle: 'Вид испытания', error: 'Выберите испытание из списка' };
     }
     put('F7', null, 'дата выполнения: ', tnr(12, true), center);
-    var ev = hx.blank ? '' : String(($('evPill') && $('evPill').textContent) || ''), dm = ev.match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
+    var ev = String(($('evPill') && $('evPill').textContent) || ''), dm = ev.match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
     var dd = dm ? +dm[1] : null, mo = dm ? MONTHS[+dm[2] - 1] : '', yy = dm ? (dm[3].length === 2 ? 2000 + +dm[3] : +dm[3]) : '';
     put('G7', null, dd, tnr(12, true), center);
     put('H7', null, mo, tnr(12, true), center);
