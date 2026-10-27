@@ -32,6 +32,7 @@ function doGet(e) {
     try { return jsonOut(listDates()); } catch (err) { return jsonOut({ ok: false, error: String(err) }); }
   }
   var sheet = getSheet();
+  try { fillMissingNumbers(sheet); } catch (err) {}
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) {
     return jsonOut({ ok: true, data: [], event: currentEvent() });
@@ -158,6 +159,7 @@ function addParticipant(p) {
 // как они видны в таблице (getDisplayValues — «12,10» не превратится в 12.1)
 function getResults() {
   var sheet = getSheet();
+  try { fillMissingNumbers(sheet); } catch (err) {}
   var lastRow = sheet.getLastRow();
   var lastCol = Math.min(COL_LETTER, sheet.getMaxColumns()); // A:S
   var head = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
@@ -767,6 +769,7 @@ function onEdit(e) {
   try {
     var name = e && e.range ? e.range.getSheet().getName() : '';
     if (name === NORMS_SHEET) refreshNormNumbers(e.range.getSheet());
+    if (name === SHEET_NAME && e.range.getColumn() <= COL_FIO) fillMissingNumbers(e.range.getSheet());
     if (normName(name) === LONG_SHEET && e.range.getColumn() <= 2 && e.range.getLastColumn() >= 2) {
       var rg = e.range, r0 = Math.max(rg.getRow(), 2), r1 = rg.getLastRow();
       if (r1 >= r0) fixLongCells(rg.getSheet().getRange(r0, 2, r1 - r0 + 1, 1));
@@ -861,6 +864,40 @@ function getSheet() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
   if (!sheet) throw new Error('нет листа «' + SHEET_NAME + '»');
   return sheet;
+}
+
+// Участникам, вставленным в «Список» вручную без номера, даём следующие номера (max+1, max+2…),
+// иначе сайт их не показывает, а на листах нормативов у них нет номера.
+function fillMissingNumbers(sheet) {
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+  var ab = sheet.getRange(2, COL_NUM, last - 1, 2).getValues();
+  var need = [];
+  ab.forEach(function (r, i) {
+    if (String(r[1]).trim() !== '' && String(r[0]).trim() === '') need.push(i);
+  });
+  if (!need.length) return 0;
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(5000)) return 0;
+  try {
+    ab = sheet.getRange(2, COL_NUM, last - 1, 2).getValues();   // перечитываем под замком
+    var max = 0;
+    ab.forEach(function (r) { var n = parseInt(r[0], 10); if (n > max) max = n; });
+    // пишем только пустые ячейки, подряд идущие — одним блоком
+    var added = 0, start = -1, block = [];
+    var flush = function () { if (block.length) sheet.getRange(2 + start, COL_NUM, block.length, 1).setValues(block); block = []; start = -1; };
+    ab.forEach(function (r, i) {
+      if (String(r[1]).trim() !== '' && String(r[0]).trim() === '') {
+        if (start === -1) start = i;
+        block.push([++max]); added++;
+      } else flush();
+    });
+    flush();
+    if (added) SpreadsheetApp.flush();
+    return added;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function findRowByUin(sheet, uin) {
