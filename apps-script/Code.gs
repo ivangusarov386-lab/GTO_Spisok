@@ -313,9 +313,10 @@ function sendToBase(again) {
   if (!people.length) return { ok: false, error: 'в «Списке» нет участников' };
 
   var base = SpreadsheetApp.openById(BASE_SPREADSHEET_ID);
-  var bs = base.getSheetByName(BASE_SHEET) || base.getSheets()[0];
-  var bw = bs.getLastColumn();
-  var bhead = bs.getRange(1, 1, 1, bw).getDisplayValues()[0].map(normKeyPart);
+  var bs = baseSheetFor(base, date);
+  var lay = baseLayout(bs, head);
+  var bw = lay.width, bhead = lay.head;
+  if (lay.fio === -1) return { ok: false, error: 'на листе «' + bs.getName() + '» в первой строке нет столбца «ФИО»' };
   var asNumber = function (v) {
     var t = String(v).trim();
     return /^-?\d+([.,]\d+)?$/.test(t) ? Number(t.replace(',', '.')) : t;
@@ -335,7 +336,7 @@ function sendToBase(again) {
     });
   });
 
-  var start = Math.max(bs.getLastRow(), 1) + 1;              // строго ниже последней записи
+  var start = baseLastRow(bs, lay) + 1;                     // строго ниже последней записи (по ФИО — справа аналитика)
   var need = start + rows.length - 1;
   if (need > bs.getMaxRows()) bs.insertRowsAfter(bs.getMaxRows(), need - bs.getMaxRows());
   var uinCol = bhead.indexOf('уин');
@@ -344,12 +345,188 @@ function sendToBase(again) {
   if (dateCol !== -1) bs.getRange(start, dateCol + 1, rows.length, 1).setNumberFormat('dd.mm.yyyy');
   bs.getRange(start, 1, rows.length, bw).setValues(rows);
   SpreadsheetApp.flush();
+  try { refreshBaseSheet(bs); } catch (e) {}                 // подсветка знаков и аналитика справа
 
   var at = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
   PropertiesService.getDocumentProperties().setProperty('base_sent', JSON.stringify({ event: event, at: at, count: rows.length }));
   var ctl = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONTROL_SHEET);
   if (ctl) ctl.getRange(4, 1, 1, 2).setValues([['В базу отправлено', at + ' — ' + rows.length + ' чел.']]);
-  return { ok: true, count: rows.length, event: event, date: Utilities.formatDate(date, Session.getScriptTimeZone(), 'dd.MM.yyyy'), at: at };
+  return { ok: true, count: rows.length, event: event, sheet: bs.getName(),
+           date: Utilities.formatDate(date, Session.getScriptTimeZone(), 'dd.MM.yyyy'), at: at };
+}
+
+// Лист базы по учебному году даты сдачи: «База сдавших 2026-2027» (сентябрь–август).
+// Нет листа этого года — пишем в лист самого позднего года; нет листов с годами — в первый.
+function baseSheetFor(base, date) {
+  var y = date.getFullYear(), start = date.getMonth() >= 8 ? y : y - 1;
+  var best = null, bestYear = -1;
+  var sheets = base.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var m = sheets[i].getName().match(/^\s*база сдавших\s*(\d{4})\s*[-–—]\s*(\d{4})/i);
+    if (!m) continue;
+    if (+m[1] === start) return sheets[i];
+    if (+m[1] > bestYear) { bestYear = +m[1]; best = sheets[i]; }
+  }
+  return best || base.getSheetByName(BASE_SHEET) || sheets[0];
+}
+
+function isBaseSheet(sh) { return /^\s*база сдавших/i.test(sh.getName()); }
+
+// Столбцы данных базы — подряд с A, пока заголовок знакомый (дальше — аналитика)
+function baseLayout(bs, listHead) {
+  var cols = Math.max(bs.getLastColumn(), 1);
+  var raw = bs.getRange(1, 1, 1, cols).getDisplayValues()[0];
+  var known = { 'дата сдачи': 1, 'дата': 1, 'фио': 1, 'уин': 1, 'ступень': 1, 'пол': 1, 'класс': 1 };
+  var disc = {};
+  (listHead || getSheet().getRange(1, COL_RES_FIRST, 1, COL_RES_LAST - COL_RES_FIRST + 1).getDisplayValues()[0].map(normKeyPart))
+    .forEach(function (h) { if (h) disc[h] = 1; });
+  var head = [];
+  for (var c = 0; c < raw.length; c++) {
+    var h = normKeyPart(raw[c]);
+    if (!h || !(known[h] || disc[h])) break;
+    head.push(h);
+  }
+  var at = function (n) { return head.indexOf(n); };
+  return { width: Math.max(head.length, 1), head: head, fio: at('фио'), st: at('ступень'), pol: at('пол'), cls: at('класс'), uin: at('уин'),
+           date: at('дата сдачи') !== -1 ? at('дата сдачи') : at('дата'),
+           res: head.map(function (h, i) { return disc[h] ? i : -1; }).filter(function (i) { return i !== -1; }) };
+}
+
+function baseLastRow(bs, lay) {
+  var last = bs.getLastRow();
+  if (last < 2 || lay.fio === -1) return 1;
+  var col = bs.getRange(2, lay.fio + 1, last - 1, 1).getDisplayValues();
+  for (var r = col.length; r > 0; r--) if (String(col[r - 1][0]).trim() !== '') return r + 1;
+  return 1;
+}
+
+// Подсветка знаков на листе базы и аналитика справа от данных (как в выгрузке). Пересчитывается целиком.
+function refreshBaseSheet(bs) {
+  var lay = baseLayout(bs);
+  var last = baseLastRow(bs, lay);
+  var map = {};
+  getNorms().forEach(function (n) { map[n.key] = n; });
+  var n = last - 1;
+  var data = n > 0 ? bs.getRange(2, 1, n, lay.width).getDisplayValues() : [];
+  var colors = { 3: BADGE_COLORS[3], 2: BADGE_COLORS[2], 1: BADGE_COLORS[1] };
+
+  // уровни знаков
+  var levels = data.map(function (r) {
+    var st = (String(r[lay.st] || '').trim().split(' ')[0] || '').toUpperCase();
+    var prefix = st + '|' + normKeyPart(r[lay.pol]) + '|';
+    return lay.res.map(function (c) {
+      var nr = map[prefix + lay.head[c]], v = String(r[c]).trim();
+      if (!nr || v === '') return { lvl: 0, has: v !== '', name: nr ? (nr.name || lay.head[c]) : '' };
+      var x = normValue(v, nr.fmt), lvl = 0;
+      if (x !== '') {
+        var up = nr.dir === 'больше';
+        var ok = function (t) { return typeof t === 'number' && (up ? x >= t : x <= t); };
+        lvl = ok(nr.g) ? 3 : ok(nr.s) ? 2 : ok(nr.b) ? 1 : 0;
+      }
+      return { lvl: lvl, has: true, name: nr.name || lay.head[c] };
+    });
+  });
+  if (n > 0 && lay.res.length) {
+    var r0 = lay.res[0], r1 = lay.res[lay.res.length - 1];
+    var rg = bs.getRange(2, r0 + 1, n, r1 - r0 + 1);
+    var bgs = rg.getBackgrounds();
+    var ours = {}; Object.keys(colors).forEach(function (k) { ours[colors[k].toLowerCase()] = true; });
+    levels.forEach(function (row, i) {
+      lay.res.forEach(function (c, k) {
+        var want = row[k].lvl ? colors[row[k].lvl] : (ours[String(bgs[i][c - r0]).toLowerCase()] ? '#ffffff' : bgs[i][c - r0]);
+        bgs[i][c - r0] = want;
+      });
+    });
+    rg.setBackgrounds(bgs);
+  }
+
+  // аналитика: по нормативам, по классам, по датам
+  var A0 = lay.width + 1, W = 7;
+  var area = bs.getRange(1, A0, Math.max(bs.getMaxRows(), 1), W);
+  area.clear();
+  var out = [], fills = [];
+  var put = function (row, fill) { while (row.length < W) row.push(''); out.push(row); fills.push(fill || null); };
+  var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
+  var key = function (r) { return String(r[lay.uin] || '').replace(/\D/g, '') || String(r[lay.fio]).trim().toLowerCase(); };
+  var dates = {};
+  data.forEach(function (r) { dates[String(r[lay.date] || '').trim()] = 1; });
+  put(['Аналитика — ' + bs.getName()], 'title');
+  put(['обновлено ' + stamp + ' · записей ' + n + ' · дат сдачи ' + Object.keys(dates).filter(Boolean).length]);
+  put([]);
+  put(['По нормативам', 'Сдавали', 'Золото', 'Серебро', 'Бронза', 'Сдали на знак', 'Без знака'], 'head');
+  var tests = {}, order = [];
+  levels.forEach(function (row) {
+    row.forEach(function (x, k) {
+      if (!x.has || !x.name) return;
+      var t = tests[x.name] || (tests[x.name] = { c: lay.res[k], n: 0, l: [0, 0, 0, 0] });
+      if (order.indexOf(x.name) === -1) order.push(x.name);
+      t.n++; t.l[x.lvl]++;
+    });
+  });
+  order.sort(function (a, b) { return (tests[a].c - tests[b].c) || (a < b ? -1 : 1); });
+  var tot = [0, 0, 0, 0, 0];
+  order.forEach(function (name) {
+    var t = tests[name], badge = t.l[1] + t.l[2] + t.l[3];
+    put([name, t.n, t.l[3], t.l[2], t.l[1], badge, t.n - badge]);
+    tot[0] += t.n; tot[1] += t.l[3]; tot[2] += t.l[2]; tot[3] += t.l[1]; tot[4] += badge;
+  });
+  put(['Итого', tot[0], tot[1], tot[2], tot[3], tot[4], tot[0] - tot[4]], 'total');
+  put([]);
+  put(['По классам', 'Человек', 'Сдавали', 'Сдали на знак', 'Золото', 'Серебро', 'Бронза'], 'head');
+  var cls = {};
+  data.forEach(function (r, i) {
+    var c = lay.cls === -1 ? '' : String(r[lay.cls]).trim();
+    if (!c) c = '(без класса)';
+    var o = cls[c] || (cls[c] = { people: {}, took: {}, badge: {}, l: [0, 0, 0, 0] });
+    var k = key(r), any = false, anyBadge = false;
+    o.people[k] = 1;
+    levels[i].forEach(function (x) { if (x.has) { any = true; o.l[x.lvl]++; if (x.lvl) anyBadge = true; } });
+    if (any) o.took[k] = 1;
+    if (anyBadge) o.badge[k] = 1;
+  });
+  Object.keys(cls).sort(function (a, b) { return (parseInt(a, 10) || 99) - (parseInt(b, 10) || 99) || (a < b ? -1 : 1); }).forEach(function (c) {
+    var o = cls[c];
+    put([c, Object.keys(o.people).length, Object.keys(o.took).length, Object.keys(o.badge).length, o.l[3], o.l[2], o.l[1]]);
+  });
+  put([]);
+  put(['По датам сдачи', 'Записей', 'Результатов', 'Знаков', 'Золото', 'Серебро', 'Бронза'], 'head');
+  var byDate = {}, dOrder = [];
+  data.forEach(function (r, i) {
+    var d = String(r[lay.date] || '').trim() || '(без даты)';
+    var o = byDate[d] || (byDate[d] = { n: 0, res: 0, l: [0, 0, 0, 0] });
+    if (dOrder.indexOf(d) === -1) dOrder.push(d);
+    o.n++;
+    levels[i].forEach(function (x) { if (x.has) { o.res++; o.l[x.lvl]++; } });
+  });
+  dOrder.forEach(function (d) { var o = byDate[d]; put([d, o.n, o.res, o.l[1] + o.l[2] + o.l[3], o.l[3], o.l[2], o.l[1]]); });
+
+  if (out.length > bs.getMaxRows()) bs.insertRowsAfter(bs.getMaxRows(), out.length - bs.getMaxRows());
+  var block = bs.getRange(1, A0, out.length, W);
+  block.setNumberFormat('@').setValues(out.map(function (r) { return r.map(function (x) { return String(x); }); }));
+  block.setHorizontalAlignment('center');
+  bs.getRange(1, A0, out.length, 1).setHorizontalAlignment('left');
+  fills.forEach(function (f, i) {
+    if (!f) return;
+    var rg = bs.getRange(i + 1, A0, 1, W);
+    if (f === 'title') rg.setFontWeight('bold').setFontSize(12);
+    if (f === 'total') rg.setFontWeight('bold');
+    if (f === 'head') {
+      rg.setFontWeight('bold').setBackground('#EEF1F6');
+      var t = out[i][0];
+      var gi = t === 'По нормативам' ? 2 : t === 'По классам' ? 4 : 4;
+      bs.getRange(i + 1, A0 + gi, 1, 3).setBackgrounds([[colors[3], colors[2], colors[1]]]);
+    }
+  });
+  bs.setColumnWidth(A0, 300);
+  for (var w = 1; w < W; w++) bs.setColumnWidth(A0 + w, 95);
+  return { rows: n };
+}
+
+function menuRefreshBase() {
+  var base = SpreadsheetApp.openById(BASE_SPREADSHEET_ID);
+  var done = [];
+  base.getSheets().forEach(function (sh) { if (isBaseSheet(sh)) { refreshBaseSheet(sh); done.push(sh.getName()); } });
+  SpreadsheetApp.getUi().alert(done.length ? 'Обновлены подсветка и аналитика: ' + done.join(', ') : 'В «Базе сдавших» нет листов, начинающихся с «База сдавших».');
 }
 
 function menuToBase() {
@@ -367,7 +544,7 @@ function menuToBase() {
   lock.waitLock(30000);
   var res;
   try { res = sendToBase(again); } finally { lock.releaseLock(); }
-  ui.alert(res.ok ? 'Готово: в «Базу сдавших» записано ' + res.count + ' чел. с датой ' + res.date + '.' : 'Не отправлено: ' + res.error);
+  ui.alert(res.ok ? 'Готово: в «' + res.sheet + '» записано ' + res.count + ' чел. с датой ' + res.date + '.' : 'Не отправлено: ' + res.error);
 }
 
 // ===================== Загрузка выгрузки с другой площадки =====================
@@ -1006,6 +1183,7 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('ГТО')
     .addItem('Загрузить дату из регистрации…', 'showLoadDialog')
     .addItem('В базу: отправить протокол в «Базу сдавших»', 'menuToBase')
+    .addItem('База сдавших: обновить подсветку и аналитику', 'menuRefreshBase')
     .addItem('Подсветка знаков: создать / обновить', 'menuSetupBadges')
     .addItem('Упорядочить по алфавиту и перенумеровать', 'menuRenumber')
     .addToUi();

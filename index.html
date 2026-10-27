@@ -690,7 +690,7 @@
       .then(function (res) {
         if (res && !res.ok && res.already) { askAgain = res; return; }
         if (!res || !res.ok) throw scriptError((res && res.error) || 'скрипт вернул ok: false');
-        toast('В «Базу сдавших» записано ' + res.count + ' чел. с датой ' + res.date + '.', true);
+        toast('В «' + (res.sheet || 'Базу сдавших') + '» записано ' + res.count + ' чел. с датой ' + res.date + '. Подсветка и аналитика обновлены.', true);
       })
       .catch(function (err) {
         eventError('Не отправлено в базу: ' + errText(err) +
