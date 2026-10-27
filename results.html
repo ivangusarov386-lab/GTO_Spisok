@@ -551,7 +551,7 @@
           var rc = colName(R0 + j), m = colName(M0 + j) + r, x = colName(X0 + j) + r, raw = at(rc);
           var n = d ? normOf(d, j) : null;
           hrow.getCell(M0 + j).value = {
-            formula: 'IF(OR(' + at(C.fio) + '="",' + raw + '=""),"",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at(C.pol) + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
+            formula: 'IF(' + raw + '="","",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at(C.pol) + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
             result: d && n && has(d.res[j]) ? normRow[n.key] : '' };
           hrow.getCell(X0 + j).value = {
             formula: 'IF(' + m + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),"")))))',
