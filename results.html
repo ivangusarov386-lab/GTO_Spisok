@@ -195,6 +195,11 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
           Excel
         </button>
+        <button class="btn xls" id="importBtn" title="Загрузить выгрузку или бланк с другой площадки: участники и результаты перенесутся в главный протокол">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
+          Загрузить
+        </button>
+        <input type="file" id="importFile" accept=".xlsx" multiple hidden>
         <button class="btn xls" id="blankBtn" title="Пустой бланк в том же виде: те же листы и подсветка, ступень и пол — выпадающими списками">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 12v6M9 15h6"/></svg>
           Бланк
@@ -528,8 +533,7 @@
       ws.getColumn(1).font = { bold: true, color: { argb: 'FF15803D' } };
       ws.getCell('A1').font = bold;
     }
-    ws.getCell(C.fio + '1').note = 'Чтобы подсветка знаков не пропала, данные из другого файла вставляйте только значениями: ' +
-      'правый клик → Параметры вставки → «Значения» (123) или Ctrl+Alt+V → «значения». Обычная вставка Ctrl+V стирает подсветку в этих ячейках.';
+    // примечаний к ячейкам не ставим: файлы с ними после пересохранения не читает загрузка на сайте
     for (var k = 0; k < nd; k++) ws.getColumn(R0 + k).width = Math.max(9, String(disciplines[k].name).length + 3);
 
     if (nd) {
@@ -885,6 +889,122 @@
       .then(function () { btn.disabled = false; });
   }
 
+  // ---- Загрузка выгрузки/бланка с другой площадки в главный протокол ----
+  // Читаем лист «Результаты» (или первый лист): столбцы ищем по заголовкам строки 1.
+  var IMPORT_TIMEOUT_MS = 240000;
+  function xlCellValue(v) {
+    if (v === null || v === undefined) return '';
+    if (v instanceof Date) {                                   // «12:40» в Excel — время; у нас это мин:сек
+      var sec = Math.round((v.getTime() - Date.UTC(1899, 11, 30)) / 60000);
+      return Math.floor(sec / 60) + ':' + ('0' + (sec % 60)).slice(-2);
+    }
+    if (typeof v === 'object') {
+      if (v.richText) return v.richText.map(function (t) { return t.text; }).join('');
+      if (v.text !== undefined) return String(v.text);
+      if (v.result !== undefined) return xlCellValue(v.result);
+      if (v.error) return '';
+      return '';
+    }
+    if (typeof v === 'number') return String(Math.round(v * 1000) / 1000).replace('.', ',');
+    return String(v).trim();
+  }
+  function readImportFile(ExcelJS, file) {
+    return file.arrayBuffer().then(function (buf) {
+      var wb = new ExcelJS.Workbook();
+      return wb.xlsx.load(buf).then(function () {
+        var ws = wb.getWorksheet('Результаты') || wb.worksheets[0];
+        if (!ws) throw new Error('в файле нет листов');
+        var head = {}, cols = {};
+        ws.getRow(1).eachCell(function (cell, c) { head[xlCellValue(cell.value).toLowerCase()] = c; });
+        var find = function (names) { for (var i = 0; i < names.length; i++) if (head[names[i]]) return head[names[i]]; return 0; };
+        cols.fio = find(['фио', 'ф.и.о.']); cols.uin = find(['уин', 'уин участника']); cols.st = find(['ступень', 'ступень гто']);
+        cols.pol = find(['пол']); cols.cls = find(['класс']); cols.pres = find(['приход']);
+        if (!cols.fio) throw new Error('не найден столбец «ФИО» в первой строке листа «' + ws.name + '»');
+        var res = disciplines.map(function (d) { return { name: d.name, col: head[String(d.name).trim().toLowerCase()] || 0 }; })
+          .filter(function (d) { return d.col; });
+        if (!res.length) throw new Error('не найдено ни одного столбца норматива (отжимание, прыжки…)');
+        var items = [];
+        for (var r = 2; r <= ws.rowCount; r++) {
+          var row = ws.getRow(r), val = function (c) { return c ? xlCellValue(row.getCell(c).value) : ''; };
+          var fio = val(cols.fio).replace(/\s+/g, ' ');
+          if (!fio) continue;
+          var cls = val(cols.cls).match(/^(\d+)\s*(.*)$/), pres = val(cols.pres).toLowerCase();
+          var it = { fio: fio, uin: val(cols.uin), stupen: val(cols.st), pol: val(cols.pol).toLowerCase(),
+                     klass: cls ? cls[1] : val(cols.cls), letter: cls ? cls[2].toUpperCase() : '',
+                     present: /^(✓|✔|v|\+|да|1|true|истина)$/.test(pres), res: {} };
+          if (it.pol === 'м' || it.pol === 'муж' || it.pol === 'муж.') it.pol = 'мужской';
+          if (it.pol === 'ж' || it.pol === 'жен' || it.pol === 'жен.') it.pol = 'женский';
+          res.forEach(function (d) { var v = val(d.col); if (v !== '') it.res[d.name] = v; });
+          items.push(it);
+        }
+        return items;
+      });
+    });
+  }
+  function postScript(body) {
+    return requestJSON(scriptUrl, IMPORT_TIMEOUT_MS, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) })
+      .then(function (res) {
+        if (!res || !res.ok) {
+          var e = (res && res.error) || 'скрипт вернул ошибку';
+          if (/неизвестное действие/.test(e)) e = 'в Apps Script старая версия кода — обновите его и выпустите новую версию развёртывания';
+          throw new Error(e);
+        }
+        return res;
+      });
+  }
+  function importFiles(files) {
+    if (!files.length) return;
+    if (!disciplines.length) { toast('Сначала дождитесь загрузки данных из таблицы.'); return; }
+    var btn = $('importBtn');
+    btn.disabled = true;
+    var items = [], key = function (it) { return String(it.uin).replace(/\D/g, '') || it.fio.toLowerCase().replace(/ё/g, 'е'); };
+    loadExcelJS()
+      .then(function (ExcelJS) {
+        return files.reduce(function (p, f) {
+          return p.then(function () {
+            return readImportFile(ExcelJS, f).then(function (list) { items = items.concat(list); },
+              function (err) { throw new Error('«' + f.name + '»: ' + (err && err.message || err)); });
+          });
+        }, Promise.resolve());
+      })
+      .then(function () {
+        var seen = {};                                         // один человек в нескольких файлах — объединяем
+        items = items.filter(function (it) {
+          var k = key(it);
+          if (!seen[k]) { seen[k] = it; return true; }
+          Object.keys(it.res).forEach(function (c) { seen[k].res[c] = it.res[c]; });
+          seen[k].present = seen[k].present || it.present;
+          return false;
+        });
+        if (!items.length) throw new Error('в файле нет участников');
+        toast('Проверяю ' + items.length + ' участников по главному протоколу…');
+        return postScript({ action: 'import', dry: true, items: items });
+      })
+      .then(function (res) {
+        var st = res.stat;
+        var msg = 'Перенести в главный протокол?\n\n' +
+          'Участников в файле: ' + st.items + '\n' +
+          'Найдены в протоколе: ' + st.found + '\n' +
+          'Новые — будут добавлены в «Список»: ' + st.added +
+          (st.newNames.length ? ' (' + st.newNames.join(', ') + (st.added > st.newNames.length ? '…' : '') + ')' : '') + '\n' +
+          'Результатов в файле: ' + st.results + ', запишется: ' + st.changed + ', уже такие же: ' + st.same + '\n' +
+          (st.present ? 'Отметок «пришёл»: ' + st.present + '\n' : '') +
+          (st.unknown.length ? '\nНет в протоколе столбцов: ' + st.unknown.join(', ') + ' — эти результаты пропущены.\n' : '') +
+          '\nПрежние результаты этих участников по тем же нормативам заменятся результатами из файла.';
+        if (!window.confirm(msg)) return null;
+        toast('Записываю в главный протокол…');
+        return postScript({ action: 'import', items: items });
+      })
+      .then(function (res) {
+        if (!res) return;
+        var st = res.stat;
+        toast('Готово: записано результатов ' + st.changed + (st.added ? ', добавлено участников ' + st.added : '') + '.');
+        load(true);
+      })
+      .catch(function (err) { toast('Не загружено: ' + (err && err.message || err)); })
+      .then(function () { btn.disabled = false; });
+  }
+
   // Пустой бланк: та же выгрузка без участников — для другой площадки приёма
   function downloadBlank() {
     if (!disciplines.length) { toast('Сначала дождитесь загрузки данных из таблицы.'); return; }
@@ -1009,7 +1129,7 @@
     $('sHere').textContent = data.filter(isHere).length;
   }
 
-  function requestJSON(url, timeoutMs) {
+  function requestJSON(url, timeoutMs, init) {
     var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var timer;
     var timeout = new Promise(function (_, reject) {
@@ -1018,7 +1138,10 @@
         if (ctrl) ctrl.abort();
       }, timeoutMs);
     });
-    var req = fetch(url, ctrl ? { cache: 'no-store', signal: ctrl.signal } : { cache: 'no-store' })
+    var opts = { cache: 'no-store' };
+    if (init) Object.keys(init).forEach(function (k) { opts[k] = init[k]; });
+    if (ctrl) opts.signal = ctrl.signal;
+    var req = fetch(url, opts)
       .then(function (r) {
         return r.text().then(function (t) {
           try { return JSON.parse(t); } catch (e) {
@@ -1122,6 +1245,8 @@
   refreshBtn.addEventListener('click', function () { load(true); });
   $('xlsBtn').addEventListener('click', exportExcel);
   $('blankBtn').addEventListener('click', downloadBlank);
+  $('importBtn').addEventListener('click', function () { $('importFile').value = ''; $('importFile').click(); });
+  $('importFile').addEventListener('change', function () { importFiles(Array.prototype.slice.call(this.files || [])); });
 
   // Как на странице явки: буквы с клавиатуры — в поиск, Delete — очистить
   document.addEventListener('keydown', function (e) {
