@@ -470,6 +470,7 @@
     var C = blank ? { num: 'A', fio: 'B', uin: 'C', st: 'D', pol: 'E' }
                   : { pres: 'A', num: 'B', fio: 'C', uin: 'D', st: 'E', pol: 'F', cls: 'G' };
     var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: blank ? 2 : 3, ySplit: 1 }] });
+    var fw = blank ? null : wb.addWorksheet('Итоговый протокол', { views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] });
     var aw = blank ? null : wb.addWorksheet('Анализ', { views: [{ state: 'frozen', ySplit: 1 }] });
     var pw = blank ? null : wb.addWorksheet('Протокол');
     var nw = wb.addWorksheet('Нормативы', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -596,6 +597,7 @@
       var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, CL0: CL0, nd: nd, nlist: nlist, list: list };
       var tests = testList(hx);
       addAnalysisSheet(aw, tests, hx);
+      addFinalSheet(fw, tests.slice().sort(function (a, b) { return (a.col - b.col) || (a.name < b.name ? -1 : 1); }), hx, C, headFill);
       addProtocolSheet(wb, pw, tests, hx);
     }
     if (nd && list.length) addStageSheets(wb, list, { nd: nd, R0: R0, nlist: nlist, headFill: headFill, lv: levelFormula });
@@ -692,6 +694,65 @@
     for (var k = 2; k <= 8; k++) tot.getCell(k).value = { formula: 'SUM(' + colName(k) + (top + 2) + ':' + colName(k) + end + ')' };
     tot.font = { bold: true };
     aw.getCell('A' + (tr + 2)).value = '«Сдавали» — у скольких человек есть хотя бы один результат; «Сдали на знак» — сколько человек получили хотя бы один знак; золото, серебро и бронза — сколько всего таких результатов в классе.';
+  }
+
+  // «Итоговый протокол»: у каждого реального норматива свой столбец («…на высокой перекладине» и
+  // «…на низкой» — отдельно, «Бег на 1000 м» и «Бег на 2000 м» — отдельно). Строки — как на «Результатах»
+  // (по номеру строки, так что добавленные вручную участники тоже попадают). Служебные столбцы справа скрыты:
+  // в каком столбце «Результатов» этот норматив у участника и уровень знака.
+  function addFinalSheet(fw, tests, hx, C, headFill) {
+    var RS = "'Результаты'!", Z = "'_знаки'!", NS = "'Нормативы'!";
+    var info = [['Приход', C.pres], ['№', C.num], ['ФИО', C.fio], ['УИН', C.uin], ['Ступень', C.st], ['Пол', C.pol], ['Класс', C.cls]];
+    var nt = tests.length, T1 = info.length + 1, P0 = T1 + nt + 1, L0 = P0 + nt;
+    var rWide = RS + '$A:$' + colName(hx.R0 + hx.nd);
+    var head = fw.getRow(1);
+    info.forEach(function (x, i) { head.getCell(i + 1).value = x[0]; });
+    tests.forEach(function (t, k) { head.getCell(T1 + k).value = t.name; head.getCell(P0 + k).value = 'столбец (служ.)'; head.getCell(L0 + k).value = 'знак (служ.)'; });
+    head.font = { bold: true };
+    head.height = 78;
+    for (var c = 1; c < T1 + nt; c++) {
+      head.getCell(c).fill = headFill;
+      head.getCell(c).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    }
+    for (var r = 2; r <= hx.rows; r++) {
+      var row = fw.getRow(r), at = function (col) { return 'INDEX(' + RS + '$' + col + ':$' + col + ',ROW())'; };
+      var fio = at(C.fio);
+      info.forEach(function (x, i) { row.getCell(i + 1).value = { formula: 'IF(' + fio + '="","",' + at(x[1]) + '&"")' }; });
+      var tRow = Z + '$' + colName(hx.T0) + r + ':$' + colName(hx.T0 + hx.nd - 1) + r;
+      tests.forEach(function (t, k) {
+        var tc = colName(T1 + k), pos = colName(P0 + k) + r;
+        row.getCell(P0 + k).value = { formula: 'IFERROR(MATCH(' + tc + '$1,' + tRow + ',0),"")' };
+        row.getCell(L0 + k).value = { formula: 'IF(' + pos + '="",0,INDEX(' + Z + '$A:$' + colName(hx.R0 + hx.nd) + ',' + r + ',' + (hx.R0 - 1) + '+' + pos + '))' };
+        var res = 'INDEX(' + rWide + ',ROW(),' + (hx.R0 - 1) + '+' + pos + ')';
+        var m = 'INDEX(' + Z + '$A:$' + colName(hx.M0 + hx.nd) + ',' + r + ',' + (hx.M0 - 1) + '+' + pos + ')';
+        var sec = xlSeconds(res);
+        row.getCell(T1 + k).value = { formula: 'IF(' + pos + '="","",IF(' + res + '="","",IFERROR(IF(INDEX(' + NS + '$F:$F,' + m + ')="мин:сек",' +
+          'INT(' + sec + '/60)&":"&RIGHT("0"&MOD(' + sec + ',60),2),' + res + '),' + res + ')))' };
+        row.getCell(T1 + k).alignment = { horizontal: 'center' };
+      });
+    }
+    [8, 6, 34, 15, 22, 10, 8].forEach(function (w, i) { fw.getColumn(i + 1).width = w; });
+    fw.getColumn(1).alignment = { horizontal: 'center' };
+    fw.getColumn(1).font = { bold: true, color: { argb: 'FF15803D' } };
+    head.getCell(1).font = { bold: true };
+    head.getCell(1).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    for (var k = 0; k < nt; k++) {
+      fw.getColumn(T1 + k).width = 15;
+      fw.getColumn(P0 + k).hidden = true;
+      fw.getColumn(L0 + k).hidden = true;
+    }
+    fw.getColumn(T1 + nt).width = 3;
+    if (nt) {
+      var lv = colName(L0);
+      fw.addConditionalFormatting({
+        ref: colName(T1) + '2:' + colName(T1 + nt - 1) + hx.rows,
+        rules: [3, 2, 1].map(function (lvl, i) {
+          return { type: 'expression', priority: i + 1, formulae: ['AND(' + colName(T1) + '2<>"",' + lv + '2=' + lvl + ')'],
+                   style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
+        })
+      });
+    }
+    fw.autoFilter = { from: 'A1', to: colName(T1 + nt - 1) + '1' };
   }
 
   var MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
