@@ -62,10 +62,11 @@ function doPost(e) {
   var lock = LockService.getScriptLock();
   try {
     var params = JSON.parse(e.postData.contents);
-    lock.waitLock(params.action === 'loadDate' ? 30000 : 10000);
+    lock.waitLock(params.action === 'loadDate' || params.action === 'import' ? 30000 : 10000);
     if (params.action === 'add') return jsonOut(addParticipant(params));
     if (params.action === 'loadDate') return jsonOut(loadDate(params.sheet, params.mode));
     if (params.action === 'renumber') return jsonOut(sortAndRenumber());
+    if (params.action === 'import') return jsonOut(importResults(params));
     if (params.action && params.action !== 'mark') {
       return jsonOut({ ok: false, error: 'неизвестное действие: ' + params.action });
     }
@@ -270,6 +271,117 @@ function loadDate(name, mode) {
   setControl(name, people.length, archive);
   SpreadsheetApp.flush();
   return { ok: true, mode: 'replace', loaded: people.length, archive: archive, event: name };
+}
+
+// ===================== Загрузка выгрузки с другой площадки =====================
+// Сайт присылает участников из чужого файла выгрузки: { fio, uin, stupen, pol, klass, letter, present,
+// res: { 'отжимание': '43', 'длинная': '9:45', … } }. Участника ищем по УИН, затем по ФИО;
+// кого нет — дописываем в «Список». Результат пишем в столбец B листа норматива (как судья),
+// прежний результат заменяется. dry: true — только посчитать, ничего не меняя.
+function importResults(params) {
+  var items = params.items || [];
+  var dry = !!params.dry;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = getSheet();
+  fillMissingNumbers(sheet);
+  var fioKey = function (f) { return String(f || '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/ё/g, 'е'); };
+  var uinKey = function (u) { return String(u || '').replace(/\D/g, ''); };
+
+  // Участники «Списка»
+  var last = sheet.getLastRow(), byUin = {}, byFio = {}, maxNum = 0, lastFioRow = 1;
+  if (last >= 2) {
+    sheet.getRange(2, 1, last - 1, COL_UIN).getValues().forEach(function (r, i) {
+      var n = parseInt(r[COL_NUM - 1], 10);
+      if (n > maxNum) maxNum = n;
+      if (String(r[COL_FIO - 1]).trim() === '') return;
+      lastFioRow = i + 2;
+      var u = uinKey(r[COL_UIN - 1]), f = fioKey(r[COL_FIO - 1]);
+      if (u) byUin[u] = i + 2;
+      byFio[f] = byFio[f] ? -1 : i + 2;                     // -1 — тёзки, по ФИО не сопоставляем
+    });
+  }
+
+  // Столбец «Списка» → лист норматива (из формулы вида ='прыжки'!B2)
+  var width = COL_RES_LAST - COL_RES_FIRST + 1;
+  var head = sheet.getRange(1, COL_RES_FIRST, 1, width).getDisplayValues()[0];
+  var forms = sheet.getRange(2, COL_RES_FIRST, 1, width).getFormulas()[0];
+  var target = {};
+  head.forEach(function (h, j) {
+    var m = String(forms[j]).match(/^=\s*'?([^'!]+)'?!/);
+    var sh = m && ss.getSheetByName(m[1]);
+    if (h && sh) target[normKeyPart(h)] = sh;
+  });
+
+  // Сопоставление
+  var stat = { items: items.length, found: 0, added: 0, results: 0, changed: 0, same: 0, present: 0, unknown: {}, newNames: [] };
+  var plan = [], fresh = [];
+  items.forEach(function (it) {
+    var u = uinKey(it.uin), row = (u && byUin[u]) || 0;
+    if (!row) { var f = byFio[fioKey(it.fio)]; if (f > 0) row = f; }
+    if (row) stat.found++;
+    else {
+      if (String(it.fio || '').trim() === '') return;
+      fresh.push(it);
+      stat.added++;
+      if (stat.newNames.length < 15) stat.newNames.push(String(it.fio).trim());
+    }
+    plan.push({ it: it, row: row });
+  });
+
+  if (!dry && fresh.length) {
+    var start = lastFioRow + 1;
+    writePeople(sheet, fresh.map(function (it, k) {
+      return { num: maxNum + k + 1, fio: String(it.fio).replace(/\s+/g, ' ').trim(), uin: String(it.uin || '').trim(),
+               stupen: String(it.stupen || '').trim(), pol: String(it.pol || '').trim(),
+               klass: String(it.klass || '').trim(), letter: String(it.letter || '').trim() };
+    }), start);
+    var k = 0;
+    plan.forEach(function (p) { if (!p.row) p.row = start + k++; });
+    SpreadsheetApp.flush();
+  }
+
+  // Результаты: по листам норматива, столбец B
+  var writes = {};                                          // имя листа → { row: значение }
+  var current = {};
+  plan.forEach(function (p) {
+    Object.keys(p.it.res || {}).forEach(function (col) {
+      var v = String(p.it.res[col] == null ? '' : p.it.res[col]).trim();
+      if (v === '') return;
+      var sh = target[normKeyPart(col)];
+      if (!sh) { stat.unknown[col] = true; return; }
+      var name = sh.getName();
+      if (normName(name) === LONG_SHEET) v = toMinSecText(v) || v;
+      stat.results++;
+      if (!p.row) { stat.changed++; return; }               // новый участник (только при проверке)
+      if (!current[name]) {
+        var n = Math.max(sh.getLastRow(), 1);
+        current[name] = n >= 2 ? sh.getRange(2, 2, n - 1, 1).getDisplayValues().map(function (r) { return String(r[0]).trim(); }) : [];
+      }
+      var old = current[name][p.row - 2] || '';
+      if (old === v) { stat.same++; return; }
+      stat.changed++;
+      (writes[name] = writes[name] || {})[p.row] = v;
+    });
+    if (p.it.present) stat.present++;
+  });
+  stat.unknown = Object.keys(stat.unknown);
+  if (dry) return { ok: true, dry: true, stat: stat };
+
+  Object.keys(writes).forEach(function (name) {
+    var sh = ss.getSheetByName(name), rows = Object.keys(writes[name]).map(Number).sort(function (a, b) { return a - b; });
+    var i = 0;
+    while (i < rows.length) {                               // подряд идущие строки — одним блоком
+      var j = i;
+      while (j + 1 < rows.length && rows[j + 1] === rows[j] + 1) j++;
+      var block = rows.slice(i, j + 1).map(function (r) { return [writes[name][r]]; });
+      sh.getRange(rows[i], 2, block.length, 1).setNumberFormat('@').setValues(block);
+      i = j + 1;
+    }
+  });
+  plan.forEach(function (p) { if (p.it.present && p.row) sheet.getRange(p.row, COL_PRESENT).setValue(true); });
+  SpreadsheetApp.flush();
+  try { paintBadges(); } catch (e) {}
+  return { ok: true, stat: stat };
 }
 
 // ===================== Упорядочить «Список» по ФИО и перенумеровать 1…N =====================
