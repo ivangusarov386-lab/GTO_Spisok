@@ -195,6 +195,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
           Excel
         </button>
+        <button class="btn xls" id="blankBtn" title="Пустой бланк в том же виде: те же листы и подсветка, ступень и пол — выпадающими списками">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 12v6M9 15h6"/></svg>
+          Бланк
+        </button>
       </div>
     </div>
   </header>
@@ -447,7 +451,13 @@
 
   function xlSeconds(x) { return 'IF(' + x + '<1,ROUND(' + x + '*1440,0),INT(' + x + ')*60+ROUND((' + x + '-INT(' + x + '))*100,0))'; }
 
-  function buildWorkbook(ExcelJS, list) {
+  // Ступени и пол для выпадающих списков (как пишутся в протоколе)
+  var STUPENI = ['I ступень (6-7 лет)', 'II ступень (8-9 лет)', 'III ступень (10-11 лет)', 'IV ступень (12-13 лет)',
+                 'V ступень (14-15 лет)', 'VI ступень (16-17 лет)', 'VII ступень (18-19 лет)'];
+  var POLY = ['мужской', 'женский'];
+
+  function buildWorkbook(ExcelJS, list, opts) {
+    opts = opts || {};
     var wb = new ExcelJS.Workbook();
     wb.calcProperties.fullCalcOnLoad = true;
     var ws = wb.addWorksheet('Результаты', { views: [{ state: 'frozen', xSplit: 3, ySplit: 1 }] });
@@ -561,8 +571,17 @@
       });
       ws.autoFilter = { from: 'A1', to: lastCol + '1' };
     }
+    // Ступень (E) и пол (F) — выпадающими списками, на все строки под участников
+    var lists = wb.getWorksheet('_списки') || wb.addWorksheet('_списки', { state: 'hidden' });
+    lists.getRow(1).getCell(45).value = 'ступени'; lists.getRow(1).getCell(46).value = 'пол';
+    STUPENI.forEach(function (v, i) { lists.getRow(i + 2).getCell(45).value = v; });
+    POLY.forEach(function (v, i) { lists.getRow(i + 2).getCell(46).value = v; });
+    ws.dataValidations.add('E2:E' + rows, { type: 'list', allowBlank: true, formulae: ["'_списки'!$AS$2:$AS$" + (STUPENI.length + 1)],
+      showErrorMessage: true, errorStyle: 'warning', errorTitle: 'Ступень', error: 'Выберите ступень из списка' });
+    ws.dataValidations.add('F2:F' + rows, { type: 'list', allowBlank: true, formulae: ["'_списки'!$AT$2:$AT$3"],
+      showErrorMessage: true, errorStyle: 'warning', errorTitle: 'Пол', error: 'Выберите пол из списка' });
     if (nd) {
-      var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, CL0: CL0, nd: nd, nlist: nlist, list: list };
+      var hx = { rows: rows, R0: R0, M0: M0, T0: T0, SEL: SEL, CL0: CL0, nd: nd, nlist: nlist, list: list, blank: !!opts.blank };
       var tests = testList(hx);
       addAnalysisSheet(aw, tests, hx);
       addProtocolSheet(wb, pw, tests, hx);
@@ -592,7 +611,7 @@
     });
     hx.nlist.forEach(function (n) {
       var p = n.key.split('|'), name = n.name || p[2];
-      if (!stages[p[0]]) return;
+      if (hx.list.length && !stages[p[0]]) return;          // в пустом бланке — все ступени
       if (!byName[name]) { byName[name] = { name: name, col: order.indexOf(p[2]), stages: [] }; out.push(byName[name]); }
       if (byName[name].stages.indexOf(p[0]) === -1) byName[name].stages.push(p[0]);
     });
@@ -698,7 +717,7 @@
         showErrorMessage: true, errorTitle: 'Вид испытания', error: 'Выберите испытание из списка' };
     }
     put('F7', null, 'дата выполнения: ', tnr(12, true), center);
-    var ev = String(($('evPill') && $('evPill').textContent) || ''), dm = ev.match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
+    var ev = hx.blank ? '' : String(($('evPill') && $('evPill').textContent) || ''), dm = ev.match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
     var dd = dm ? +dm[1] : null, mo = dm ? MONTHS[+dm[2] - 1] : '', yy = dm ? (dm[3].length === 2 ? 2000 + +dm[3] : +dm[3]) : '';
     put('G7', null, dd, tnr(12, true), center);
     put('H7', null, mo, tnr(12, true), center);
@@ -855,6 +874,25 @@
         toast('Скачано: ' + name + ' (' + list.length + ' чел.)' + (stale ? '. Нет связи с таблицей — явка и результаты на момент последнего обновления страницы' : ''));
       })
       .catch(function (err) { toast('Не получилось сделать Excel: ' + (err && err.message || err)); })
+      .then(function () { btn.disabled = false; });
+  }
+
+  // Пустой бланк: та же выгрузка без участников — для другой площадки приёма
+  function downloadBlank() {
+    if (!disciplines.length) { toast('Сначала дождитесь загрузки данных из таблицы.'); return; }
+    var btn = $('blankBtn');
+    btn.disabled = true;
+    loadExcelJS()
+      .then(function (ExcelJS) { return buildWorkbook(ExcelJS, [], { blank: true }).xlsx.writeBuffer(); })
+      .then(function (buf) {
+        var url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        var a = document.createElement('a');
+        a.href = url; a.download = 'ГТО бланк.xlsx';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+        toast('Скачано: ГТО бланк.xlsx');
+      })
+      .catch(function (err) { toast('Не получилось сделать бланк: ' + (err && err.message || err)); })
       .then(function () { btn.disabled = false; });
   }
 
@@ -1075,6 +1113,7 @@
   searchEl.addEventListener('input', render);
   refreshBtn.addEventListener('click', function () { load(true); });
   $('xlsBtn').addEventListener('click', exportExcel);
+  $('blankBtn').addEventListener('click', downloadBlank);
 
   // Как на странице явки: буквы с клавиатуры — в поиск, Delete — очистить
   document.addEventListener('keydown', function (e) {
