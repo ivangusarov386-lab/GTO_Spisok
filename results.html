@@ -709,14 +709,13 @@
      'нагрудный номер (при наличии)', 'результат выполнения', 'уровень\n выполнения', 'спортивное звание или спортивный разряд (при наличии)']
       .forEach(function (h, i) { var c = pw.getRow(9).getCell(i + 1); c.value = h; c.font = tnr(i === 1 ? 16 : 10, true); c.alignment = center; c.border = box; });
 
-    // Служебные столбцы L:O (скрыты): строка участника на «Результатах», столбец испытания, № норматива, уровень
+    // Служебные столбцы L:N (скрыты): строка участника на «Результатах», столбец испытания, № норматива
     var selCol = colName(hx.SEL), cntCol = colName(hx.SEL + 1), zWide = Z + '$A:$' + colName(hx.SEL + 1), rWide = RS + '$A:$' + colName(hx.R0 + hx.nd);
     for (var k = 1; k <= slots; k++) {
       var r = first + k - 1, row = pw.getRow(r), L = '$L' + r, M = '$M' + r;
       row.getCell(12).value = { formula: 'IFERROR(MATCH(' + k + ',' + Z + '$' + cntCol + '$2:$' + cntCol + '$' + hx.rows + ',0)+1,"")' };
       row.getCell(13).value = { formula: 'IF(' + L + '="","",INDEX(' + Z + '$' + selCol + ':$' + selCol + ',' + L + '))' };
       row.getCell(14).value = { formula: 'IF(' + M + '="","",INDEX(' + zWide + ',' + L + ',' + (hx.M0 - 1) + '+' + M + '))' };
-      row.getCell(15).value = { formula: 'IF(' + M + '="",0,INDEX(' + zWide + ',' + L + ',' + (hx.R0 - 1) + '+' + M + '))' };
       var f = function (expr) { return { formula: 'IF(' + L + '="","",' + expr + ')' }; };
       var st = 'INDEX(' + RS + '$E:$E,' + L + ')';
       var res = 'INDEX(' + rWide + ',' + L + ',' + (hx.R0 - 1) + '+' + M + ')';
@@ -737,12 +736,7 @@
         cell.alignment = c === 2 || c === 5 ? { vertical: 'middle', wrapText: true } : center;
       }
     }
-    [12, 13, 14, 15].forEach(function (c) { pw.getColumn(c).hidden = true; });
-    var rules = [3, 2, 1].map(function (lvl, i) {
-      return { type: 'expression', priority: i + 1, formulae: ['AND($H' + first + '<>"",$O' + first + '=' + lvl + ')'],   // стёрли результат — цвет уходит
-               style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
-    });
-    pw.addConditionalFormatting({ ref: 'H' + first + ':H' + lastRow, rules: rules });
+    [12, 13, 14].forEach(function (c) { pw.getColumn(c).hidden = true; });
 
     pw.mergeCells('A' + sig + ':J' + sig);
     var s = pw.getCell('A' + sig);
