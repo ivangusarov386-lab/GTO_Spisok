@@ -80,6 +80,8 @@
   /* Знаки ГТО: золото — жёлтый, серебро — серый, бронза — оранжевый (как в протоколе) */
   .lv3, .lv2, .lv1 { display: inline-block; min-width: 42px; padding: 2px 7px; border-radius: 7px; color: #1d1d1d; }
   .lv3 { background: #FFD966; }
+  .nobadge { color: var(--muted); }
+  th.badgecol, td.badgecol { border-left: 2px solid var(--border) !important; font-weight: 700; }
   .lv2 { background: #D9D9D9; }
   .lv1 { background: #F4B183; }
   .card .cell .val .lv3, .card .cell .val .lv2, .card .cell .val .lv1 { min-width: 0; }
@@ -408,6 +410,45 @@
     var sec = compareValue(v, n.fmt);
     return sec === null ? v : secToMinSec(sec);
   }
+  // ---- Знак ГТО по правилам ступени ----
+  // Группы физических качеств: 1 скоростные, 2 выносливость, 3 сила, 4 скоростно-силовые, 5 гибкость,
+  // 6 координационные, 7 прикладные. g — к какой группе относится столбец протокола; obl — обязательные группы;
+  // q — сколько качеств (и испытаний) нужно на бронзу, серебро, золото. Испытание засчитывается на уровень,
+  // если сдано на этот уровень или выше; знак — высший уровень, на который выполнены все условия.
+  var BADGE_RULES = (function () {
+    var I = { g: { '30м': 1, 'длинная': 2, 'пресс': 4, 'прыжки': 4, 'наклон': 5, 'метание': 6, 'челнок': 6 }, obl: [1, 2, 4, 5], q: [5, 5, 5] };
+    var II = { g: { '30м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'прыжки': 4, 'пресс': 4, 'метание': 6, 'челнок': 6 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+    var IV = { g: { '30м': 1, '60м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'челнок': 6, 'прыжки': 4, 'пресс': 4, 'метание': 7, 'стрельба': 7 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+    var VI = { g: { '60м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'прыжки': 4, 'пресс': 4, 'метание': 7, 'стрельба': 7 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+    var III = { g: { '30м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'челнок': 6, 'прыжки': 4, 'пресс': 4, 'метание': 7 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+    return { I: I, II: II, III: III, IV: IV, V: IV, VI: VI, VII: VI };
+  })();
+  var BADGE_STAGES = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+  var LEVEL_NAME = ['', 'бронза', 'серебро', 'золото'];
+  // 0 — нет знака, 1–3 — бронза/серебро/золото; null — результатов нет или ступень неизвестна
+  function gtoBadge(d) {
+    var st = (String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase(), rule = BADGE_RULES[st];
+    if (!rule || !resCount(d)) return null;
+    var best = [0, 0, 0, 0, 0, 0, 0, 0];
+    disciplines.forEach(function (disc, j) {
+      var g = rule.g[String(disc.name).trim().toLowerCase()];
+      if (g && has(d.res[j])) best[g] = Math.max(best[g], badgeLevel(d, j));
+    });
+    for (var L = 3; L >= 1; L--) {
+      var covered = best.filter(function (b) { return b >= L; }).length;
+      var obl = rule.obl.every(function (g) { return best[g] >= L; });
+      if (covered >= rule.q[L - 1] && obl) return L;
+    }
+    return 0;
+  }
+  function badgeNode(d) {
+    var b = gtoBadge(d);
+    if (b === null) return el('span', 'none', '—');
+    var n = el('span', b ? 'lv' + b : 'nobadge', b ? LEVEL_NAME[b] : 'нет');
+    n.title = b ? 'Знак ГТО по правилам ступени' : 'Пока не выполнены условия на знак';
+    return n;
+  }
+
   function badgeLevel(d, j) {
     var st = (String(d.stupen || '').trim().split(' ')[0] || '').toUpperCase();
     var key = st + '|' + String(d.pol || '').trim().toLowerCase() + '|' + String(disciplines[j].name || '').trim().toLowerCase();
@@ -542,6 +583,16 @@
       var hs = wb.addWorksheet('_знаки', { state: 'hidden' });
       var RS = "'Результаты'!", M0 = R0 + nd + 1, X0 = M0 + nd + 1, T0 = X0 + nd + 1, SEL = T0 + nd + 1, CL0 = SEL + 3;
       var PROT_PICK = "'Протокол'!$D$7";
+      // «_правила»: по ступеням — группа качества у каждого столбца протокола, обязательные группы, сколько нужно
+      var BZ0 = CL0 + 8, PR = "'_правила'!", OB0 = 2 + nd, QB0 = OB0 + 7;
+      var pr = wb.addWorksheet('_правила', { state: 'hidden' });
+      pr.getRow(1).values = ['ступень'].concat(disciplines.map(function (dd) { return dd.name; }),
+        ['обяз. 1', 'обяз. 2', 'обяз. 3', 'обяз. 4', 'обяз. 5', 'обяз. 6', 'обяз. 7', 'бронза', 'серебро', 'золото']);
+      BADGE_STAGES.forEach(function (st, i) {
+        var rule = BADGE_RULES[st];
+        pr.getRow(i + 2).values = [st].concat(disciplines.map(function (dd) { return rule.g[String(dd.name).trim().toLowerCase()] || 0; }),
+          [1, 2, 3, 4, 5, 6, 7].map(function (g) { return rule.obl.indexOf(g) === -1 ? 0 : 1; }), rule.q);
+      });
       var byRow = list.map(function (d) { return d; });
       hs.getCell('A1').value = 'Служебный лист: знак (3 — золото, 2 — серебро, 1 — бронза) для ячеек листа «Результаты». Не редактировать.';
       for (var r = 2; r <= rows; r++) {
@@ -562,6 +613,19 @@
           hrow.getCell(T0 + j).value = { formula: 'IF(' + m + '="","",INDEX(' + N + '$D:$D,' + m + ')&"")',
             result: d && n && has(d.res[j]) ? (n.name || String(disciplines[j].name).toLowerCase()) : '' };
         }
+        // знак ГТО по правилам ступени: строка правил, лучший уровень по каждой из 7 групп качеств, итог
+        var lR = '$' + colName(R0) + r + ':$' + colName(R0 + nd - 1) + r, sr = colName(BZ0) + r;
+        var bestR = '$' + colName(BZ0 + 1) + r + ':$' + colName(BZ0 + 7) + r;
+        hrow.getCell(BZ0).value = { formula: 'IFERROR(MATCH(' + stupen + ',' + PR + '$A$2:$A$8,0),"")' };
+        for (var g = 1; g <= 7; g++) {
+          hrow.getCell(BZ0 + g).value = { formula: 'IF(' + sr + '="",0,SUMPRODUCT(MAX((INDEX(' + PR + '$B$2:$' + colName(1 + nd) + '$8,' + sr + ',0)=' + g + ')*(' + lR + '))))' };
+        }
+        var okL = function (L) {
+          return 'AND(COUNTIF(' + bestR + ',">=' + L + '")>=INDEX(' + PR + '$' + colName(QB0) + '$2:$' + colName(QB0 + 2) + '$8,' + sr + ',' + L + '),' +
+            'SUMPRODUCT((INDEX(' + PR + '$' + colName(OB0) + '$2:$' + colName(OB0 + 6) + '$8,' + sr + ',0)=1)*(' + bestR + '<' + L + '))=0)';
+        };
+        hrow.getCell(BZ0 + 8).value = { formula: 'IF(' + sr + '="",0,IF(' + okL(3) + ',3,IF(' + okL(2) + ',2,IF(' + okL(1) + ',1,0))))',
+          result: d ? (gtoBadge(d) || 0) : 0 };
         if (blank) continue;                                  // «Анализа» и «Протокола» в бланке нет
         // испытание, выбранное в «Протоколе»: в каком столбце оно у участника и сколько таких до этой строки
         var sel = colName(SEL) + r;
@@ -572,7 +636,7 @@
         hrow.getCell(CL0 + 1).value = { formula: 'IF(' + at(C.fio) + '="",0,IF(TRIM(' + at(C.pres) + '&"")="",0,1))' };
         hrow.getCell(CL0 + 2).value = { formula: 'SUMPRODUCT(--(' + tRow + '<>""))' };
         [3, 2, 1].forEach(function (lvl, q) { hrow.getCell(CL0 + 3 + q).value = { formula: 'COUNTIF(' + lRow + ',' + lvl + ')' }; });
-        hrow.getCell(CL0 + 6).value = { formula: 'MAX(' + lRow + ')' };   // лучший знак участника (0–3)
+        hrow.getCell(CL0 + 6).value = { formula: colName(BZ0 + 8) + r };   // знак ГТО участника (0–3)
         hrow.getCell(SEL + 1).value = { formula: r === 2 ? 'IF(' + sel + '="",0,1)' : 'IF(' + sel + '="",' + colName(SEL + 1) + (r - 1) + ',' + colName(SEL + 1) + (r - 1) + '+1)' };
       }
       var lastCol = colName(R0 + nd - 1);
@@ -584,6 +648,26 @@
         })
       });
       ws.autoFilter = { from: 'A1', to: lastCol + '1' };
+      // «Знак ГТО» — сразу после нормативов
+      var BC = R0 + nd, bz = colName(BZ0 + 8);
+      ws.getRow(1).getCell(BC).value = 'Знак ГТО';
+      ws.getRow(1).getCell(BC).fill = headFill;
+      ws.getColumn(BC).width = 12;
+      for (var rb = 2; rb <= rows; rb++) {
+        var bcell = ws.getRow(rb).getCell(BC), dd = list[rb - 2];
+        var bres = dd ? gtoBadge(dd) : null;
+        bcell.value = { formula: 'IFERROR(CHOOSE(INDEX(\'_знаки\'!$' + bz + ':$' + bz + ',ROW())+1,"","бронза","серебро","золото"),"")',
+                        result: bres ? LEVEL_NAME[bres] : '' };
+        bcell.alignment = { horizontal: 'center' };
+        bcell.font = { bold: true };
+      }
+      ws.addConditionalFormatting({
+        ref: colName(BC) + '2:' + colName(BC) + rows,
+        rules: [3, 2, 1].map(function (lvl, i) {
+          return { type: 'expression', priority: i + 1, formulae: ['INDEX(\'_знаки\'!$' + bz + '$1:$' + bz + '$' + rows + ',ROW())=' + lvl],
+                   style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
+        })
+      });
     }
     // Ступень и пол — выпадающими списками, на все строки под участников
     var lists = wb.getWorksheet('_списки') || wb.addWorksheet('_списки', { state: 'hidden' });
@@ -678,7 +762,7 @@
     var h = aw.getRow(top + 1);
     // Все столбцы — ЛЮДИ. Каждый попадает в одну колонку по своему лучшему результату:
     // золото + серебро + бронза + без знака = сдавали.
-    h.values = ['Класс', 'В списке', 'Пришли', 'Сдавали', 'Лучший — золото', 'Лучший — серебро', 'Лучший — бронза', 'Без знака'];
+    h.values = ['Класс', 'В списке', 'Пришли', 'Сдавали', 'Знак ГТО: золото', 'Знак ГТО: серебро', 'Знак ГТО: бронза', 'Пока без знака'];
     h.font = { bold: true };
     h.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     h.height = 32;
@@ -698,8 +782,8 @@
     tot.getCell(1).value = 'Итого';
     for (var k = 2; k <= 8; k++) tot.getCell(k).value = { formula: 'SUM(' + colName(k) + (top + 2) + ':' + colName(k) + end + ')' };
     tot.font = { bold: true };
-    aw.getCell('A' + (tr + 2)).value = 'Все цифры — люди. «Сдавали» — у кого есть хотя бы один результат. Дальше каждый считается один раз — по своему лучшему результату: ' +
-      'есть хоть один норматив на золото — в «золото», иначе на серебро — в «серебро» и т. д. Золото + серебро + бронза + без знака = сдавали.';
+    aw.getCell('A' + (tr + 2)).value = 'Все цифры — люди. «Сдавали» — у кого есть хотя бы один результат. Знак ГТО — по правилам ступени: нужное число испытаний ' +
+      '(по разным физическим качествам, все обязательные) на этот уровень или выше. 4 норматива на золото и 1 на серебро — это серебро. Золото + серебро + бронза + без знака = сдавали.';
   }
 
   // «Итоговый протокол»: у каждого реального норматива свой столбец («…на высокой перекладине» и
@@ -1108,6 +1192,7 @@
     th('ФИО', 'l stick2');
     th('Класс');
     disciplines.forEach(function (d) { th(d.name, '', 'Столбец ' + d.col); });
+    th('Знак ГТО', 'badgecol', 'Знак по правилам ступени: нужное число испытаний и все обязательные — на этот уровень или выше');
     thead.appendChild(hr);
     tableEl.appendChild(thead);
     var tb = el('tbody');
@@ -1129,6 +1214,7 @@
         td.appendChild(valueNode(d, j));
         tr.appendChild(td);
       });
+      var bt = el('td', 'v badgecol'); bt.appendChild(badgeNode(d)); tr.appendChild(bt);
       tb.appendChild(tr);
     });
     tableEl.appendChild(tb);
@@ -1159,7 +1245,11 @@
         var v = el('div', 'val'); v.appendChild(valueNode(d, j)); cell.appendChild(v);
         cells.appendChild(cell);
       });
-      if (cells.children.length) c.appendChild(cells);
+      if (cells.children.length) {
+        var bc = el('div', 'cell'); bc.appendChild(el('div', 'k', 'Знак ГТО'));
+        var bv = el('div', 'val'); bv.appendChild(badgeNode(d)); bc.appendChild(bv); cells.appendChild(bc);
+        c.appendChild(cells);
+      }
       else c.appendChild(el('div', 'nores', 'Результатов пока нет'));
       cardsEl.appendChild(c);
     });

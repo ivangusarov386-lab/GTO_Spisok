@@ -355,6 +355,33 @@ function sendToBase(again) {
            date: Utilities.formatDate(date, Session.getScriptTimeZone(), 'dd.MM.yyyy'), at: at };
 }
 
+// ---- Знак ГТО по правилам ступени (как на сайте и в выгрузке) ----
+// Группы физических качеств: 1 скоростные, 2 выносливость, 3 сила, 4 скоростно-силовые, 5 гибкость,
+// 6 координационные, 7 прикладные. g — группа столбца протокола; obl — обязательные группы;
+// q — сколько качеств (и испытаний) нужно на бронзу, серебро, золото (таблицы Мосгорспорта).
+var BADGE_RULES = (function () {
+  var I = { g: { '30м': 1, 'длинная': 2, 'пресс': 4, 'прыжки': 4, 'наклон': 5, 'метание': 6, 'челнок': 6 }, obl: [1, 2, 4, 5], q: [5, 5, 5] };
+  var II = { g: { '30м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'прыжки': 4, 'пресс': 4, 'метание': 6, 'челнок': 6 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+  var III = { g: { '30м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'челнок': 6, 'прыжки': 4, 'пресс': 4, 'метание': 7 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+  var IV = { g: { '30м': 1, '60м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'челнок': 6, 'прыжки': 4, 'пресс': 4, 'метание': 7, 'стрельба': 7 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+  var VI = { g: { '60м': 1, 'длинная': 2, 'подтягивание': 3, 'отжимание': 3, 'наклон': 5, 'прыжки': 4, 'пресс': 4, 'метание': 7, 'стрельба': 7 }, obl: [1, 2, 3, 5], q: [5, 5, 6] };
+  return { I: I, II: II, III: III, IV: IV, V: IV, VI: VI, VII: VI };
+})();
+
+// st — ступень римской цифрой, lv — { 'столбец протокола': уровень 0–3 }. Возвращает 0–3.
+function gtoBadge(st, lv) {
+  var rule = BADGE_RULES[st];
+  if (!rule) return 0;
+  var best = [0, 0, 0, 0, 0, 0, 0, 0];
+  Object.keys(lv).forEach(function (col) { var g = rule.g[normKeyPart(col)]; if (g) best[g] = Math.max(best[g], lv[col]); });
+  for (var L = 3; L >= 1; L--) {
+    var covered = best.filter(function (b) { return b >= L; }).length;
+    var obl = rule.obl.every(function (g) { return best[g] >= L; });
+    if (covered >= rule.q[L - 1] && obl) return L;
+  }
+  return 0;
+}
+
 // Лист базы по учебному году даты сдачи: «База сдавших 2026-2027» (сентябрь–август).
 // Нет листа этого года — пишем в лист самого позднего года; нет листов с годами — в первый.
 function baseSheetFor(base, date) {
@@ -472,32 +499,45 @@ function refreshBaseSheet(bs) {
   });
   put(['Итого', tot[0], tot[1], tot[2], tot[3], tot[4], tot[0] - tot[4]], 'total');
   put([]);
-  // По классам и по датам — ЛЮДИ: каждый один раз, по лучшему результату (золото + серебро + бронза + без знака = сдавали)
-  var groupTable = function (title, first, keyOf, sortFn) {
-    put([title, first, 'Сдавали', 'Лучший — золото', 'Лучший — серебро', 'Лучший — бронза', 'Без знака'], 'head');
+  // По классам и по датам — ЛЮДИ, по настоящему знаку ГТО (правила ступени, см. BADGE_RULES):
+  // золото + серебро + бронза + пока без знака = сдавали. За год результаты человека из разных дней складываются.
+  var groupTable = function (title, keyOf, perRecord, sortFn) {
+    put([title, 'Человек', 'Сдавали', 'Знак ГТО: золото', 'Знак ГТО: серебро', 'Знак ГТО: бронза', 'Пока без знака'], 'head');
     var g = {}, ord = [];
     data.forEach(function (r, i) {
       var c = keyOf(r);
-      var o = g[c] || (g[c] = { people: {}, best: {} });
+      var o = g[c] || (g[c] = { people: {}, acc: {} });
       if (ord.indexOf(c) === -1) ord.push(c);
-      var k = key(r), any = false, best = 0;
-      o.people[k] = 1;
-      levels[i].forEach(function (x) { if (x.has) { any = true; if (x.lvl > best) best = x.lvl; } });
-      if (any) o.best[k] = Math.max(o.best[k] === undefined ? 0 : o.best[k], best);
+      var k = perRecord ? key(r) + '#' + i : key(r);
+      o.people[key(r)] = 1;
+      var a = o.acc[k] || (o.acc[k] = { st: '', lv: {}, any: false });
+      a.st = (String(r[lay.st] || '').trim().split(' ')[0] || '').toUpperCase() || a.st;
+      levels[i].forEach(function (x, j) {
+        if (!x.has) return;
+        a.any = true;
+        var col = lay.head[lay.res[j]];
+        a.lv[col] = Math.max(a.lv[col] || 0, x.lvl);
+      });
     });
     if (sortFn) ord.sort(sortFn);
     ord.forEach(function (c) {
-      var o = g[c], cnt = [0, 0, 0, 0];
-      Object.keys(o.best).forEach(function (k) { cnt[o.best[k]]++; });
-      put([c, Object.keys(o.people).length, Object.keys(o.best).length, cnt[3], cnt[2], cnt[1], cnt[0]]);
+      var o = g[c], cnt = [0, 0, 0, 0], took = {};
+      Object.keys(o.acc).forEach(function (k) {
+        var a = o.acc[k];
+        if (!a.any) return;
+        took[k.split('#')[0]] = 1;
+        cnt[gtoBadge(a.st, a.lv)]++;
+      });
+      put([c, Object.keys(o.people).length, Object.keys(took).length, cnt[3], cnt[2], cnt[1], cnt[0]]);
     });
   };
-  groupTable('По классам', 'Человек', function (r) { return (lay.cls === -1 ? '' : String(r[lay.cls]).trim()) || '(без класса)'; },
+  groupTable('По классам', function (r) { return (lay.cls === -1 ? '' : String(r[lay.cls]).trim()) || '(без класса)'; }, false,
     function (a, b) { return (parseInt(a, 10) || 99) - (parseInt(b, 10) || 99) || (a < b ? -1 : 1); });
   put([]);
-  groupTable('По датам сдачи', 'Человек', function (r) { return String(r[lay.date] || '').trim() || '(без даты)'; });
+  groupTable('По датам сдачи', function (r) { return String(r[lay.date] || '').trim() || '(без даты)'; }, true);
   put([]);
-  put(['«По нормативам» — считаются результаты. «По классам» и «По датам» — люди: каждый один раз, по лучшему результату.']);
+  put(['«По нормативам» — считаются результаты. «По классам» и «По датам» — люди по знаку ГТО: нужное число испытаний ' +
+       '(по разным физическим качествам, все обязательные) на этот уровень или выше. 4 на золото + 1 на серебро = серебро.']);
 
   if (out.length > bs.getMaxRows()) bs.insertRowsAfter(bs.getMaxRows(), out.length - bs.getMaxRows());
   var block = bs.getRange(1, A0, out.length, W);
