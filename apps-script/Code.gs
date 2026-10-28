@@ -403,7 +403,7 @@ function isBaseSheet(sh) { return /^\s*база сдавших/i.test(sh.getName
 function baseLayout(bs, listHead) {
   var cols = Math.max(bs.getLastColumn(), 1);
   var raw = bs.getRange(1, 1, 1, cols).getDisplayValues()[0];
-  var known = { 'дата сдачи': 1, 'дата': 1, 'фио': 1, 'уин': 1, 'ступень': 1, 'пол': 1, 'класс': 1 };
+  var known = { 'дата сдачи': 1, 'дата': 1, 'фио': 1, 'уин': 1, 'ступень': 1, 'пол': 1, 'класс': 1, 'знак гто': 1 };
   var disc = {};
   (listHead || getSheet().getRange(1, COL_RES_FIRST, 1, COL_RES_LAST - COL_RES_FIRST + 1).getDisplayValues()[0].map(normKeyPart))
     .forEach(function (h) { if (h) disc[h] = 1; });
@@ -414,7 +414,7 @@ function baseLayout(bs, listHead) {
     head.push(h);
   }
   var at = function (n) { return head.indexOf(n); };
-  return { width: Math.max(head.length, 1), head: head, fio: at('фио'), st: at('ступень'), pol: at('пол'), cls: at('класс'), uin: at('уин'),
+  return { width: Math.max(head.length, 1), head: head, fio: at('фио'), st: at('ступень'), pol: at('пол'), cls: at('класс'), uin: at('уин'), badge: at('знак гто'),
            date: at('дата сдачи') !== -1 ? at('дата сдачи') : at('дата'),
            res: head.map(function (h, i) { return disc[h] ? i : -1; }).filter(function (i) { return i !== -1; }) };
 }
@@ -430,6 +430,12 @@ function baseLastRow(bs, lay) {
 // Подсветка знаков на листе базы и аналитика справа от данных (как в выгрузке). Пересчитывается целиком.
 function refreshBaseSheet(bs) {
   var lay = baseLayout(bs);
+  // Столбец «Знак ГТО» — сразу после нормативов (старую аналитику на его месте стираем)
+  if (lay.badge === -1 && lay.fio !== -1) {
+    bs.getRange(1, lay.width + 1, Math.max(bs.getMaxRows(), 1), 8).clear();
+    bs.getRange(1, lay.width + 1).setValue('Знак ГТО').setFontWeight('bold').setHorizontalAlignment('center');
+    lay = baseLayout(bs);
+  }
   var last = baseLastRow(bs, lay);
   var map = {};
   getNorms().forEach(function (n) { map[n.key] = n; });
@@ -465,6 +471,27 @@ function refreshBaseSheet(bs) {
       });
     });
     rg.setBackgrounds(bgs);
+  }
+
+  // «Знак ГТО» в каждой строке — накопительно за год: все результаты этого человека до этой строки включительно
+  if (n > 0 && lay.badge !== -1) {
+    var acc = {}, keyOf = function (r) { return String(r[lay.uin] || '').replace(/\D/g, '') || String(r[lay.fio]).trim().toLowerCase(); };
+    var bvals = [], bbg = [];
+    data.forEach(function (r, i) {
+      var k = keyOf(r), a = acc[k] || (acc[k] = { lv: {}, any: false });
+      levels[i].forEach(function (x, j) {
+        if (!x.has) return;
+        a.any = true;
+        var col = lay.head[lay.res[j]];
+        a.lv[col] = Math.max(a.lv[col] || 0, x.lvl);
+      });
+      var st = (String(r[lay.st] || '').trim().split(' ')[0] || '').toUpperCase();
+      var b = a.any ? gtoBadge(st, a.lv) : -1;
+      bvals.push([b > 0 ? ['', 'бронза', 'серебро', 'золото'][b] : b === 0 ? 'нет' : '']);
+      bbg.push([b > 0 ? colors[b] : '#ffffff']);
+    });
+    var bcol = bs.getRange(2, lay.badge + 1, n, 1);
+    bcol.setValues(bvals).setBackgrounds(bbg).setHorizontalAlignment('center').setFontWeight('bold');
   }
 
   // аналитика: по нормативам, по классам, по датам
