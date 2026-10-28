@@ -569,6 +569,12 @@
       }
     });
     for (var rr = 2; rr <= rows; rr++) for (var jj = 0; jj < nd; jj++) ws.getRow(rr).getCell(R0 + jj).alignment = { horizontal: 'center' };
+    // № — порядковый номер строки (1, 2, 3… сверху вниз), а не номер из протокола: после сортировки
+    // или вставки строки в Excel номера сами идут по порядку
+    var numCol = blank ? 1 : 2;
+    for (var rn = 2; rn <= rows; rn++) {
+      ws.getRow(rn).getCell(numCol).value = { formula: 'IF(' + C.fio + rn + '="","",ROW()-1)', result: rn - 2 < list.length ? rn - 1 : '' };
+    }
     (blank ? [6, 34, 15, 22, 10] : [9, 6, 34, 15, 22, 10, 8]).forEach(function (w, i) { ws.getColumn(i + 1).width = w; });
     if (!blank) {
       ws.getColumn(1).alignment = { horizontal: 'center' };
@@ -980,7 +986,8 @@
       stages[st].forEach(function (it, i) {
         var r = i + 2, d = it.d, row = ws.getRow(r);
         var j0 = order.indexOf(first), n0 = j0 === -1 ? null : normOf(d, j0);
-        row.values = [xlValue(d.num), d.fio, d.uin, d.stupen, d.pol, classOf(d)];
+        row.values = [null, d.fio, d.uin, d.stupen, d.pol, classOf(d)];
+        row.getCell(1).value = { formula: 'IF(B' + r + '="","",ROW()-1)', result: r - 1 };
         row.getCell(9).value = isHere(d) ? '✓' : null;
         row.getCell(9).alignment = { horizontal: 'center' };
         row.getCell(9).font = { bold: true, color: { argb: 'FF15803D' } };
