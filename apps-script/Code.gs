@@ -472,33 +472,32 @@ function refreshBaseSheet(bs) {
   });
   put(['Итого', tot[0], tot[1], tot[2], tot[3], tot[4], tot[0] - tot[4]], 'total');
   put([]);
-  put(['По классам', 'Человек', 'Сдавали', 'Сдали на знак', 'Золото', 'Серебро', 'Бронза'], 'head');
-  var cls = {};
-  data.forEach(function (r, i) {
-    var c = lay.cls === -1 ? '' : String(r[lay.cls]).trim();
-    if (!c) c = '(без класса)';
-    var o = cls[c] || (cls[c] = { people: {}, took: {}, badge: {}, l: [0, 0, 0, 0] });
-    var k = key(r), any = false, anyBadge = false;
-    o.people[k] = 1;
-    levels[i].forEach(function (x) { if (x.has) { any = true; o.l[x.lvl]++; if (x.lvl) anyBadge = true; } });
-    if (any) o.took[k] = 1;
-    if (anyBadge) o.badge[k] = 1;
-  });
-  Object.keys(cls).sort(function (a, b) { return (parseInt(a, 10) || 99) - (parseInt(b, 10) || 99) || (a < b ? -1 : 1); }).forEach(function (c) {
-    var o = cls[c];
-    put([c, Object.keys(o.people).length, Object.keys(o.took).length, Object.keys(o.badge).length, o.l[3], o.l[2], o.l[1]]);
-  });
+  // По классам и по датам — ЛЮДИ: каждый один раз, по лучшему результату (золото + серебро + бронза + без знака = сдавали)
+  var groupTable = function (title, first, keyOf, sortFn) {
+    put([title, first, 'Сдавали', 'Лучший — золото', 'Лучший — серебро', 'Лучший — бронза', 'Без знака'], 'head');
+    var g = {}, ord = [];
+    data.forEach(function (r, i) {
+      var c = keyOf(r);
+      var o = g[c] || (g[c] = { people: {}, best: {} });
+      if (ord.indexOf(c) === -1) ord.push(c);
+      var k = key(r), any = false, best = 0;
+      o.people[k] = 1;
+      levels[i].forEach(function (x) { if (x.has) { any = true; if (x.lvl > best) best = x.lvl; } });
+      if (any) o.best[k] = Math.max(o.best[k] === undefined ? 0 : o.best[k], best);
+    });
+    if (sortFn) ord.sort(sortFn);
+    ord.forEach(function (c) {
+      var o = g[c], cnt = [0, 0, 0, 0];
+      Object.keys(o.best).forEach(function (k) { cnt[o.best[k]]++; });
+      put([c, Object.keys(o.people).length, Object.keys(o.best).length, cnt[3], cnt[2], cnt[1], cnt[0]]);
+    });
+  };
+  groupTable('По классам', 'Человек', function (r) { return (lay.cls === -1 ? '' : String(r[lay.cls]).trim()) || '(без класса)'; },
+    function (a, b) { return (parseInt(a, 10) || 99) - (parseInt(b, 10) || 99) || (a < b ? -1 : 1); });
   put([]);
-  put(['По датам сдачи', 'Записей', 'Результатов', 'Знаков', 'Золото', 'Серебро', 'Бронза'], 'head');
-  var byDate = {}, dOrder = [];
-  data.forEach(function (r, i) {
-    var d = String(r[lay.date] || '').trim() || '(без даты)';
-    var o = byDate[d] || (byDate[d] = { n: 0, res: 0, l: [0, 0, 0, 0] });
-    if (dOrder.indexOf(d) === -1) dOrder.push(d);
-    o.n++;
-    levels[i].forEach(function (x) { if (x.has) { o.res++; o.l[x.lvl]++; } });
-  });
-  dOrder.forEach(function (d) { var o = byDate[d]; put([d, o.n, o.res, o.l[1] + o.l[2] + o.l[3], o.l[3], o.l[2], o.l[1]]); });
+  groupTable('По датам сдачи', 'Человек', function (r) { return String(r[lay.date] || '').trim() || '(без даты)'; });
+  put([]);
+  put(['«По нормативам» — считаются результаты. «По классам» и «По датам» — люди: каждый один раз, по лучшему результату.']);
 
   if (out.length > bs.getMaxRows()) bs.insertRowsAfter(bs.getMaxRows(), out.length - bs.getMaxRows());
   var block = bs.getRange(1, A0, out.length, W);
@@ -513,7 +512,7 @@ function refreshBaseSheet(bs) {
     if (f === 'head') {
       rg.setFontWeight('bold').setBackground('#EEF1F6');
       var t = out[i][0];
-      var gi = t === 'По нормативам' ? 2 : t === 'По классам' ? 4 : 4;
+      var gi = t === 'По нормативам' ? 2 : 3;
       bs.getRange(i + 1, A0 + gi, 1, 3).setBackgrounds([[colors[3], colors[2], colors[1]]]);
     }
   });

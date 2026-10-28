@@ -572,6 +572,7 @@
         hrow.getCell(CL0 + 1).value = { formula: 'IF(' + at(C.fio) + '="",0,IF(TRIM(' + at(C.pres) + '&"")="",0,1))' };
         hrow.getCell(CL0 + 2).value = { formula: 'SUMPRODUCT(--(' + tRow + '<>""))' };
         [3, 2, 1].forEach(function (lvl, q) { hrow.getCell(CL0 + 3 + q).value = { formula: 'COUNTIF(' + lRow + ',' + lvl + ')' }; });
+        hrow.getCell(CL0 + 6).value = { formula: 'MAX(' + lRow + ')' };   // лучший знак участника (0–3)
         hrow.getCell(SEL + 1).value = { formula: r === 2 ? 'IF(' + sel + '="",0,1)' : 'IF(' + sel + '="",' + colName(SEL + 1) + (r - 1) + ',' + colName(SEL + 1) + (r - 1) + '+1)' };
       }
       var lastCol = colName(R0 + nd - 1);
@@ -675,9 +676,13 @@
     t.getCell(1).value = 'По классам';
     t.font = { bold: true, size: 13 };
     var h = aw.getRow(top + 1);
-    h.values = ['Класс', 'В списке', 'Пришли', 'Сдавали', 'Сдали на знак', 'Золото', 'Серебро', 'Бронза'];
+    // Все столбцы — ЛЮДИ. Каждый попадает в одну колонку по своему лучшему результату:
+    // золото + серебро + бронза + без знака = сдавали.
+    h.values = ['Класс', 'В списке', 'Пришли', 'Сдавали', 'Лучший — золото', 'Лучший — серебро', 'Лучший — бронза', 'Без знака'];
     h.font = { bold: true };
-    var fills = { 6: 'FFFFD966', 7: 'FFD9D9D9', 8: 'FFF4B183' };
+    h.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    h.height = 32;
+    var fills = { 5: 'FFFFD966', 6: 'FFD9D9D9', 7: 'FFF4B183' };
     for (var c = 1; c <= 8; c++) h.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fills[c] || 'FFEEF1F6' } };
     classes.forEach(function (cl, i) {
       var r = top + 2 + i, A = '$A' + r, row = aw.getRow(r);
@@ -685,15 +690,16 @@
       row.getCell(2).value = { formula: 'COUNTIF(' + col(0) + ',' + A + ')' };
       row.getCell(3).value = { formula: 'COUNTIFS(' + col(0) + ',' + A + ',' + col(1) + ',1)' };
       row.getCell(4).value = { formula: 'COUNTIFS(' + col(0) + ',' + A + ',' + col(2) + ',">0")' };
-      row.getCell(5).value = { formula: 'SUMPRODUCT((' + col(0) + '=' + A + ')*((' + col(3) + '+' + col(4) + '+' + col(5) + ')>0))' };
-      [3, 4, 5].forEach(function (k, q) { row.getCell(6 + q).value = { formula: 'SUMIFS(' + col(k) + ',' + col(0) + ',' + A + ')' }; });
+      [3, 2, 1].forEach(function (lvl, q) { row.getCell(5 + q).value = { formula: 'COUNTIFS(' + col(0) + ',' + A + ',' + col(6) + ',' + lvl + ')' }; });
+      row.getCell(8).value = { formula: 'COUNTIFS(' + col(0) + ',' + A + ',' + col(2) + ',">0",' + col(6) + ',0)' };
       row.getCell(4).font = { bold: true };
     });
     var tr = top + 2 + classes.length + 1, tot = aw.getRow(tr), end = tr - 2;
     tot.getCell(1).value = 'Итого';
     for (var k = 2; k <= 8; k++) tot.getCell(k).value = { formula: 'SUM(' + colName(k) + (top + 2) + ':' + colName(k) + end + ')' };
     tot.font = { bold: true };
-    aw.getCell('A' + (tr + 2)).value = '«Сдавали» — у скольких человек есть хотя бы один результат; «Сдали на знак» — сколько человек получили хотя бы один знак; золото, серебро и бронза — сколько всего таких результатов в классе.';
+    aw.getCell('A' + (tr + 2)).value = 'Все цифры — люди. «Сдавали» — у кого есть хотя бы один результат. Дальше каждый считается один раз — по своему лучшему результату: ' +
+      'есть хоть один норматив на золото — в «золото», иначе на серебро — в «серебро» и т. д. Золото + серебро + бронза + без знака = сдавали.';
   }
 
   // «Итоговый протокол»: у каждого реального норматива свой столбец («…на высокой перекладине» и
