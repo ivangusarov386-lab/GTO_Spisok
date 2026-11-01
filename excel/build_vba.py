@@ -18,11 +18,40 @@ EXPECTED = '0ced1464b3677e98f5e3a8c5d80135e18dc98dca39299f1a8cfd2a00999fbf9f'
 FREE, END, FAT, NONE = 0xffffffff, 0xfffffffe, 0xfffffffd, 0xffffffff
 
 
-def compress_raw(data):
-    # MS-OVBA 2.4.1: uncompressed chunks have exactly 4096 bytes.
+def compress_vba(data):
+    """MS-OVBA 2.4.1 container; the final chunk must not pad the dir stream."""
     out = bytearray(b'\x01')
     for i in range(0, len(data), 4096):
-        out += struct.pack('<H', 0x3fff) + data[i:i + 4096].ljust(4096, b' ')
+        chunk, pos, payload = data[i:i + 4096], 0, bytearray()
+        while pos < len(chunk):
+            flag_at = len(payload)
+            payload.append(0)
+            for bit in range(8):
+                if pos == len(chunk):
+                    break
+                offset_bits = max(4, (pos - 1).bit_length())
+                length_bits = 16 - offset_bits
+                match = chunk.rfind(chunk[pos:pos + 3], max(0, pos - (1 << offset_bits)), pos + 2) if pos and len(chunk) - pos >= 3 else -1
+                length = 0
+                if match >= 0:
+                    distance = pos - match
+                    limit = min(len(chunk) - pos, (1 << length_bits) + 2)
+                    while length < limit and chunk[pos + length] == chunk[pos + length - distance]:
+                        length += 1
+                if length >= 3:
+                    payload[flag_at] |= 1 << bit
+                    payload += struct.pack('<H', ((distance - 1) << length_bits) | (length - 3))
+                    pos += length
+                else:
+                    payload.append(chunk[pos])
+                    pos += 1
+        if len(payload) < 4096:
+            out += struct.pack('<H', 0xb000 | (len(payload) - 1)) + payload
+        elif len(chunk) == 4096:
+            out += struct.pack('<H', 0x3fff) + chunk
+        else:
+            raise ValueError('VBA final chunk does not fit; do not pad a directory stream')
+    assert decompress_stream(out) == data
     return bytes(out)
 
 
@@ -55,7 +84,8 @@ def write_cfb(streams):
 
     mini, minifat = bytearray(), []
     for e in entries:
-        e.update(left=NONE, right=NONE, child=NONE, color=1, start=END, size=0)
+        # MS-CFB 2.6.1: storage entries must have Starting Sector Location = 0.
+        e.update(left=NONE, right=NONE, child=NONE, color=1, start=0 if e['kind'] == 1 else END, size=0)
         if e['kind'] != 2:
             continue
         data = e['data']
@@ -138,7 +168,7 @@ def build():
     streams = {
         'PROJECT': project.encode('cp1252'),
         'PROJECTwm': b''.join(n.encode('cp1252') + b'\0' + (n + '\0').encode('utf-16le') for n in keep) + b'\0\0',
-        'VBA/dir': compress_raw(bytes(prefix) + b''.join(modules) + directory[pos:]),
+        'VBA/dir': compress_vba(bytes(prefix) + b''.join(modules) + directory[pos:]),
         # MS-OVBA _VBA_PROJECT reserved header, no implementation-specific performance cache.
         'VBA/_VBA_PROJECT': bytes.fromhex('cc61ffff000000'),
     }
@@ -146,15 +176,21 @@ def build():
     for name, suffix in [('ThisWorkbook', 'cls'), ('Module1', 'bas')]:
         source = (ROOT / 'excel' / (name + '.' + suffix)).read_text().replace('\r\n', '\n').replace('\n', '\r\n')
         expected_sources[name] = source
-        streams['VBA/' + name] = compress_raw(source.encode('cp1252'))
+        streams['VBA/' + name] = compress_vba(source.encode('cp1252'))
     target = ROOT / 'vendor/protocol/vbaProject.bin'
     target.write_bytes(write_cfb(streams))
     # Independently parse the generated compound document and decompress every module.
     parsed = {Path(name).stem: source for _, _, name, source in VBA_Parser(str(target)).extract_macros()}
     assert set(parsed) == set(expected_sources), parsed.keys()
     for name, source in expected_sources.items():
-        assert parsed[name].rstrip() == source.rstrip(), name
+        assert parsed[name] == source, name
     result = olefile.OleFileIO(target)
+    for entry in result.direntries:
+        if entry and entry.entry_type == 1:
+            assert entry.isectStart == 0 and entry.size == 0, entry.name
+    for name, value in streams.items():
+        assert result.openstream(name).read() == value, name
+    assert decompress_stream(result.openstream('VBA/dir').read()).endswith(b'\x10\0\0\0\0\0')
     assert not any('__SRP' in '/'.join(p) for p in result.listdir())
     print(target.relative_to(ROOT), len(target.read_bytes()), 'bytes; source modules independently verified')
 

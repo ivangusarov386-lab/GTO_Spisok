@@ -488,7 +488,7 @@
   }
   // ExcelJS создаёт XLSX; добавляем проверенный локальный VBA-проект и связи XLSM.
   function withProtocolMacro(buffer) {
-    return Promise.all([loadZip(), fetch('vendor/protocol/vbaProject.bin').then(function (response) {
+    return Promise.all([loadZip(), fetch('vendor/protocol/vbaProject.bin?v=cfb2', { cache: 'no-store' }).then(function (response) {
       if (!response.ok) throw new Error('не удалось загрузить макрос протокола');
       return response.arrayBuffer();
     })]).then(function (parts) {

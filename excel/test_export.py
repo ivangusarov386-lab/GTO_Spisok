@@ -3,6 +3,7 @@
 Requires playwright, openpyxl, Chromium. Does not execute VBA or contact Google.
 """
 import asyncio, json, zipfile
+from urllib.parse import urlsplit
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from playwright.async_api import async_playwright, expect
@@ -21,7 +22,7 @@ async def main():
   page.on('pageerror',lambda e:errors.append(str(e)))
   async def route(r):
    if r.request.url.startswith('http://gto.test/'):
-    name=r.request.url.split('http://gto.test/',1)[1] or 'results.html'
+    name=urlsplit(r.request.url).path.lstrip('/') or 'results.html'
     path=ROOT/name
     return await r.fulfill(body=path.read_bytes(),content_type='text/html' if name.endswith('.html') else 'text/css' if name.endswith('.css') else 'text/javascript')
    if 'script.google.com' in r.request.url: return await r.fulfill(json=dict(ok=True,data=DATA,disciplines=DISC,norms=NORMS,event='01.11.2026'),headers={'Access-Control-Allow-Origin':'*'})
