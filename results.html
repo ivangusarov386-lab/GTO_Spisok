@@ -201,7 +201,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
           Загрузить
         </button>
-        <input type="file" id="importFile" accept=".xlsx" multiple hidden>
+        <input type="file" id="importFile" accept=".xlsx,.xlsm" multiple hidden>
         <button class="btn xls" id="blankBtn" title="Пустой бланк в том же виде: те же листы и подсветка, ступень и пол — выпадающими списками">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 12v6M9 15h6"/></svg>
           Бланк
@@ -476,11 +476,65 @@
       document.head.appendChild(s);
     });
   }
+  function loadZip() {
+    if (window.JSZip) return Promise.resolve(window.JSZip);
+    return new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      script.src = 'vendor/jszip/jszip.min.js';
+      script.onload = function () { window.JSZip ? resolve(window.JSZip) : reject(new Error('не удалось подготовить файл с макросом')); };
+      script.onerror = function () { reject(new Error('не удалось подготовить файл с макросом')); };
+      document.head.appendChild(script);
+    });
+  }
+  // ExcelJS создаёт XLSX; добавляем проверенный локальный VBA-проект и связи XLSM.
+  function withProtocolMacro(buffer) {
+    return Promise.all([loadZip(), fetch('vendor/protocol/vbaProject.bin').then(function (response) {
+      if (!response.ok) throw new Error('не удалось загрузить макрос протокола');
+      return response.arrayBuffer();
+    })]).then(function (parts) {
+      return parts[0].loadAsync(buffer).then(function (zip) {
+        var parser = new DOMParser(), serializer = new XMLSerializer();
+        function readXml(path) {
+          return zip.file(path).async('string').then(function (text) {
+            var xml = parser.parseFromString(text, 'application/xml');
+            if (xml.getElementsByTagName('parsererror').length) throw new Error('некорректная структура Excel');
+            return xml;
+          });
+        }
+        return Promise.all([readXml('[Content_Types].xml'), readXml('xl/_rels/workbook.xml.rels'), readXml('xl/workbook.xml')]).then(function (docs) {
+          var types = docs[0], rels = docs[1], workbook = docs[2];
+          Array.prototype.forEach.call(types.getElementsByTagName('Override'), function (item) {
+            if (item.getAttribute('PartName') === '/xl/workbook.xml') item.setAttribute('ContentType', 'application/vnd.ms-excel.sheet.macroEnabled.main+xml');
+          });
+          var type = types.createElementNS(types.documentElement.namespaceURI, 'Override');
+          type.setAttribute('PartName', '/xl/vbaProject.bin');
+          type.setAttribute('ContentType', 'application/vnd.ms-office.vbaProject');
+          types.documentElement.appendChild(type);
+          var relation = rels.createElementNS(rels.documentElement.namespaceURI, 'Relationship');
+          relation.setAttribute('Id', 'rIdGtoVba');
+          relation.setAttribute('Type', 'http://schemas.microsoft.com/office/2006/relationships/vbaProject');
+          relation.setAttribute('Target', 'vbaProject.bin');
+          rels.documentElement.appendChild(relation);
+          var properties = workbook.getElementsByTagName('workbookPr')[0];
+          if (!properties) {
+            properties = workbook.createElementNS(workbook.documentElement.namespaceURI, 'workbookPr');
+            workbook.documentElement.insertBefore(properties, workbook.documentElement.firstChild);
+          }
+          properties.setAttribute('codeName', 'ThisWorkbook');
+          zip.file('[Content_Types].xml', serializer.serializeToString(types));
+          zip.file('xl/_rels/workbook.xml.rels', serializer.serializeToString(rels));
+          zip.file('xl/workbook.xml', serializer.serializeToString(workbook));
+          zip.file('xl/vbaProject.bin', parts[1]);
+          return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+        });
+      });
+    });
+  }
   function colName(c) { var s = ''; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = (c - m - 1) / 26; } return s; }
-  // «мин:сек» в Excel — значение времени с форматом [h]:mm: на экране 12:40, набранное «12:40» читается так же
-  var XL_TIME = '[h]:mm';
+  // Строго для всей книги, включая скрытые листы: только «Общий».
+  // Время храним строкой «12:40», чтобы Excel не показывал долю суток.
+  var XL_NUM_FORMAT = 'General';
   var XL_ROWS = 500;  // столько строк под участников, добавленных вручную, подсвечиваются в Excel
-  function toXlTime(sec) { return sec / 1440; }
   // Значение для ячейки Excel: числа — числами (5,3 → 5.3; «6:20» → 6.20), остальное — текстом
   function xlValue(v) {
     if (!has(v)) return null;
@@ -495,7 +549,12 @@
     return norms[st + '|' + String(d.pol || '').trim().toLowerCase() + '|' + String(disciplines[j].name || '').trim().toLowerCase()];
   }
 
-  function xlSeconds(x) { return 'IF(' + x + '<1,ROUND(' + x + '*1440,0),INT(' + x + ')*60+ROUND((' + x + '-INT(' + x + '))*100,0))'; }
+  function xlSeconds(x) {
+    var text = 'TRIM(' + x + '&"")', colon = 'FIND(":",' + text + ')';
+    // Поддерживаем текст «мин:сек», числа вида 12,40 и время, введённое в самом Excel.
+    return 'IF(ISNUMBER(SEARCH(":",' + text + ')),VALUE(LEFT(' + text + ',' + colon + '-1))*60+VALUE(MID(' + text + ',' + colon + '+1,99)),' +
+      'IF(' + x + '<1,ROUND(' + x + '*1440,0),INT(' + x + ')*60+ROUND((' + x + '-INT(' + x + '))*100,0)))';
+  }
 
   // Ступени и пол для выпадающих списков (как пишутся в протоколе)
   var STUPENI = ['I ступень (6-7 лет)', 'II ступень (8-9 лет)', 'III ступень (10-11 лет)', 'IV ступень (12-13 лет)',
@@ -532,14 +591,13 @@
     nlist.forEach(function (n, i) {
       var r = i + 2, p = n.key.split('|'), ms = n.fmt === 'мин:сек';
       normRow[n.key] = r;
-      var thr = [n.b, n.s, n.g].map(function (t) { var x = num(t); return x === null ? null : ms ? toXlTime(x) : x; });
+      var thr = [n.b, n.s, n.g].map(function (t) { var x = num(t); return x === null ? null : ms ? secToMinSec(x) : x; });
       var row = nw.getRow(r);
       row.values = [p[0], p[1], p[2], n.name || p[2], n.dir, n.fmt].concat(thr);
       row.getCell(10).value = { formula: 'UPPER(TRIM(A' + r + '))&"|"&LOWER(TRIM(B' + r + '))&"|"&LOWER(TRIM(C' + r + '))', result: n.key };
       ['G', 'H', 'I'].forEach(function (c, k) {
         row.getCell(11 + k).value = { formula: 'IF(' + c + r + '="","",IF($F' + r + '="мин:сек",' + xlSeconds(c + r) + ',' + c + r + '))',
                                       result: num([n.b, n.s, n.g][k]) === null ? '' : num([n.b, n.s, n.g][k]) };
-        if (ms) row.getCell(7 + k).numFmt = XL_TIME;
       });
     });
     [9, 9, 18, 44, 9, 9, 9, 9, 9, 24, 11, 11, 11].forEach(function (w, i) { nw.getColumn(i + 1).width = w; });
@@ -564,7 +622,7 @@
       for (var j = 0; j < nd; j++) {
         var n = normOf(d, j), cell = row.getCell(R0 + j);
         var sec = n && n.fmt === 'мин:сек' && has(d.res[j]) ? compareValue(d.res[j], n.fmt) : null;
-        if (sec !== null) { cell.value = toXlTime(sec); cell.numFmt = XL_TIME; }
+        if (sec !== null) cell.value = secToMinSec(sec);
         else cell.value = xlValue(d.res[j]);
       }
     });
@@ -612,9 +670,10 @@
             formula: 'IF(' + raw + '="","",IFERROR(MATCH(' + stupen + '&"|"&LOWER(TRIM(' + at(C.pol) + '))&"|"&LOWER(TRIM(INDEX(' + RS + '$1:$1,' + (R0 + j) + '))),' + N + '$J:$J,0),""))',
             result: d && n && has(d.res[j]) ? normRow[n.key] : '' };
           hrow.getCell(X0 + j).value = {
-            formula: 'IF(' + m + '="","",IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),"")))))',
+            formula: 'IF(' + m + '="","",IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",IFERROR(' + xlSeconds(raw) + ',""),' +
+              'IF(ISNUMBER(' + raw + '),' + raw + ',IFERROR(VALUE(' + raw + '),IFERROR(VALUE(SUBSTITUTE(' + raw + ',".",",")),IFERROR(VALUE(SUBSTITUTE(' + raw + ',",",".")),""))))))',
             result: '' };
-          hrow.getCell(R0 + j).value = { formula: levelFormula(x, m), result: d && has(d.res[j]) ? badgeLevel(d, j) : 0 };
+          hrow.getCell(R0 + j).value = { formula: levelFormula(x, m, true), result: d && has(d.res[j]) ? badgeLevel(d, j) : 0 };
           // название испытания этой ячейки — для «Анализа» и «Протокола»
           hrow.getCell(T0 + j).value = { formula: 'IF(' + m + '="","",INDEX(' + N + '$D:$D,' + m + ')&"")',
             result: d && n && has(d.res[j]) ? (n.name || String(disciplines[j].name).toLowerCase()) : '' };
@@ -692,17 +751,27 @@
       addProtocolSheet(wb, pw, tests, hx);
     }
     if (nd && list.length) addStageSheets(wb, list, { nd: nd, R0: R0, nlist: nlist, headFill: headFill, lv: levelFormula });
+    // Последний шаг после создания всех листов: формат столбцов, строк и ячеек
+    // не должен переопределяться ни временем, ни стилями отдельных листов.
+    wb.eachSheet(function (sheet) {
+      for (var c = 1; c <= sheet.columnCount; c++) sheet.getColumn(c).numFmt = XL_NUM_FORMAT;
+      sheet.eachRow(function (row) {
+        row.numFmt = XL_NUM_FORMAT;
+        row.eachCell({ includeEmpty: true }, function (cell) { cell.numFmt = XL_NUM_FORMAT; });
+      });
+    });
     return wb;
   }
 
   // Формула уровня знака (0–3) для результата x по строке норматива m на листе «Нормативы»
-  function levelFormula(x, m) {
+  function levelFormula(x, m, secondsReady) {
     var N = "'Нормативы'!";
-    var V = 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",' + xlSeconds(x) + ',' + x + ')';
+    var V = secondsReady ? x : 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",' + xlSeconds(x) + ',' + x + ')';
     var T = function (col) { return 'INDEX(' + N + '$' + col + ':$' + col + ',' + m + ')'; };
     var cmp = function (col, op) { return 'AND(' + T(col) + '<>"",' + V + op + T(col) + ')'; };
     var lv = function (op) { return 'IF(' + cmp('M', op) + ',3,IF(' + cmp('L', op) + ',2,IF(' + cmp('K', op) + ',1,0)))'; };
-    return 'IF(OR(' + m + '="",NOT(ISNUMBER(' + x + '))),0,IF(INDEX(' + N + '$E:$E,' + m + ')="больше",' + lv('>=') + ',' + lv('<=') + '))';
+    var valid = secondsReady ? 'ISNUMBER(' + x + ')' : 'IF(INDEX(' + N + '$F:$F,' + m + ')="мин:сек",ISNUMBER(IFERROR(' + xlSeconds(x) + ',"")),ISNUMBER(' + x + '))';
+    return 'IF(' + m + '="",0,IF(NOT(' + valid + '),0,IF(INDEX(' + N + '$E:$E,' + m + ')="больше",' + lv('>=') + ',' + lv('<=') + ')))';
   }
 
   // Испытания для «Анализа» и выпадающего списка «Протокола»: уникальные названия с листа «Нормативы»
@@ -856,7 +925,16 @@
   // «Протокол» — бланк центра тестирования. В D7 выбирают вид испытания — строки заполняются сами
   function addProtocolSheet(wb, pw, tests, hx) {
     var RS = "'Результаты'!", Z = "'_знаки'!", NS = "'Нормативы'!";
-    var slots = Math.max(207, hx.list.length), first = 10, lastRow = first + slots - 1, sig = lastRow + 2;
+    var slots = Math.max(207, hx.rows - 1), first = 10, lastRow = first + slots - 1, sig = lastRow + 2;
+    var initialCount = hx.list.filter(function (d) {
+      return tests.length && disciplines.some(function (disc, j) {
+        var n = normOf(d, j);
+        return has(d.res[j]) && n && n.name === tests[0].name;
+      });
+    }).length;
+    // Имена не зависят от языка Excel и адреса подписей: их использует VBA.
+    wb.definedNames.add("'Протокол'!$A$" + first + ':$J$' + lastRow, 'GTO_ProtocolData');
+    wb.definedNames.add("'Протокол'!$A$" + sig + ':$J$' + sig, 'GTO_ProtocolSignatures');
     var tnr = function (sz, b) { return { name: 'Times New Roman', size: sz, bold: !!b }; };
     var thin = { style: 'thin' }, box = { top: thin, left: thin, bottom: thin, right: thin };
     var center = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -882,7 +960,7 @@
       lists.getRow(1).getCell(lc).value = 'испытания (протокол)';
       tests.forEach(function (t, i) { lists.getRow(i + 2).getCell(lc).value = t.name; });
       pick.dataValidation = { type: 'list', allowBlank: true, formulae: ["'_списки'!$" + colName(lc) + '$2:$' + colName(lc) + '$' + (tests.length + 1)],
-        showInputMessage: true, promptTitle: 'Вид испытания', prompt: 'Выберите испытание — таблица заполнится сдававшими его',
+        showInputMessage: true, promptTitle: 'Вид испытания', prompt: 'Выберите испытание. Разрешите макросы Excel: пустые строки скроются, подписи будут сразу под участниками.',
         showErrorMessage: true, errorTitle: 'Вид испытания', error: 'Выберите испытание из списка' };
     }
     put('F7', null, 'дата выполнения: ', tnr(12, true), center);
@@ -917,6 +995,7 @@
       row.getCell(8).value = f('IF(' + res + '="","",IFERROR(IF(' + isTime + ',INT(' + sec + '/60)&":"&RIGHT("0"&MOD(' + sec + ',60),2),' + res + '),' + res + '))');
       // G (нагрудный номер) и I (уровень выполнения) — пустые
       row.height = 25;
+      row.hidden = k > initialCount;
       for (var c = 1; c <= 10; c++) {
         var cell = row.getCell(c);
         cell.border = box;
@@ -925,6 +1004,7 @@
       }
     }
     [12, 13, 14].forEach(function (c) { pw.getColumn(c).hidden = true; });
+    pw.getRow(lastRow + 1).hidden = true;
 
     pw.mergeCells('A' + sig + ':J' + sig);
     var s = pw.getCell('A' + sig);
@@ -1007,7 +1087,6 @@
         return { type: 'expression', priority: i + 1, formulae: ['$K2=' + lvl],
                  style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: XL_COLORS[lvl] } } } };
       });
-      rules.push({ type: 'expression', priority: 4, formulae: ['AND($J2<>"",INDEX(' + NS + '$F:$F,$J2)="мин:сек")'], style: { numFmt: XL_TIME } });
       ws.addConditionalFormatting({ ref: 'H2:H' + last, rules: rules });
       ws.autoFilter = { from: 'A1', to: 'F1' };
       ws.getCell('I1').font = { bold: true };
@@ -1033,15 +1112,16 @@
       }, function () { stale = true; refreshMarks(); list = filtered(); })
       .then(loadExcelJS)
       .then(function (ExcelJS) { return buildWorkbook(ExcelJS, list).xlsx.writeBuffer(); })
+      .then(withProtocolMacro)
       .then(function (buf) {
         var ev = ($('evPill').textContent || '').trim();
-        var name = ('ГТО результаты' + (ev ? ' ' + ev : '')).replace(/[\\/:*?"<>|]+/g, '-') + '.xlsx';
-        var url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+        var name = ('ГТО результаты' + (ev ? ' ' + ev : '')).replace(/[\\/:*?"<>|]+/g, '-') + '.xlsm';
+        var url = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.ms-excel.sheet.macroEnabled.12' }));
         var a = document.createElement('a');
         a.href = url; a.download = name;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
-        toast('Скачано: ' + name + ' (' + list.length + ' чел.)' + (stale ? '. Нет связи с таблицей — явка и результаты на момент последнего обновления страницы' : ''));
+        toast('Скачано: ' + name + ' (' + list.length + ' чел.). Разрешите макросы в Excel для подстройки строк «Протокола».' + (stale ? ' Нет связи с таблицей — данные на момент последнего обновления страницы' : ''));
       })
       .catch(function (err) { toast('Не получилось сделать Excel: ' + (err && err.message || err)); })
       .then(function () { btn.disabled = false; });
