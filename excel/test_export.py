@@ -62,6 +62,29 @@ def check(path):
    assert b'macroEnabled.main+xml' in z.read('[Content_Types].xml')
    assert b'relationships/vbaProject' in z.read('xl/_rels/workbook.xml.rels')
   assert 'GTO_ProtocolData' in w.defined_names
+  assert 'GTO_ProtocolTemplate' in w.defined_names
+  template_name, template_ref = next(w.defined_names['GTO_ProtocolTemplate'].destinations)
+  template = w[template_name]
+  assert template.sheet_state == 'veryHidden'
+  data_name, data_ref = next(w.defined_names['GTO_ProtocolData'].destinations)
+  protocol = w[data_name]
+  _, first, _, last = openpyxl.utils.range_boundaries(data_ref)
+  assert openpyxl.utils.range_boundaries(template_ref) == (1, first, 14, last)
+  for r in range(first, last + 1):
+   for col in (1, 2, 3, 4, 6, 8, 12, 13, 14):
+    backup = template.cell(r, col)
+    assert backup.data_type == 's', (backup.coordinate, backup.data_type)
+    assert backup.value == protocol.cell(r, col).value, backup.coordinate
+   for col in (5, 7, 9, 10):
+    assert template.cell(r, col).value is None
+  # Clearing the printout must not erase the formulas used for the next test.
+  saved_results = [template.cell(r, 8).value for r in range(first, last + 1)]
+  source_values = [[c.value for c in row] for row in w['Результаты']]
+  for r in range(first, last + 1):
+   protocol.cell(r, 8).value = None
+  protocol['D7'] = 'Бег на 2000 м'
+  assert [template.cell(r, 8).value for r in range(first, last + 1)] == saved_results
+  assert [[c.value for c in row] for row in w['Результаты']] == source_values
   assert sum(not w['Протокол'].row_dimensions[r].hidden for r in range(10,513))==3
   with zipfile.ZipFile(path) as z:
    assert b'codeName="ThisWorkbook"' in z.read('xl/workbook.xml')

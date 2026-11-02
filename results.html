@@ -488,7 +488,7 @@
   }
   // ExcelJS создаёт XLSX; добавляем проверенный локальный VBA-проект и связи XLSM.
   function withProtocolMacro(buffer) {
-    return Promise.all([loadZip(), fetch('vendor/protocol/vbaProject.bin?v=cfb2', { cache: 'no-store' }).then(function (response) {
+    return Promise.all([loadZip(), fetch('vendor/protocol/vbaProject.bin?v=restore1', { cache: 'no-store' }).then(function (response) {
       if (!response.ok) throw new Error('не удалось загрузить макрос протокола');
       return response.arrayBuffer();
     })]).then(function (parts) {
@@ -1003,6 +1003,15 @@
         cell.alignment = c === 2 || c === 5 ? { vertical: 'middle', wrapText: true } : center;
       }
     }
+    // Отдельный от очищаемого «Протокола» источник формул. Храним их текстом,
+    // с теми же номерами строк: VBA вернёт их при выборе следующего испытания.
+    var template = wb.addWorksheet('_шаблон_протокола', { state: 'veryHidden' });
+    for (var tr = first; tr <= lastRow; tr++) {
+      [1, 2, 3, 4, 6, 8, 12, 13, 14].forEach(function (column) {
+        template.getRow(tr).getCell(column).value = '=' + pw.getRow(tr).getCell(column).value.formula;
+      });
+    }
+    wb.definedNames.add("'_шаблон_протокола'!$A$" + first + ':$N$' + lastRow, 'GTO_ProtocolTemplate');
     [12, 13, 14].forEach(function (c) { pw.getColumn(c).hidden = true; });
     pw.getRow(lastRow + 1).hidden = true;
 
