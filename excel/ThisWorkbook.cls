@@ -18,7 +18,7 @@ Private Sub Workbook_SheetChange(ByVal Sh As Object, ByVal Target As Range)
     ' Clearing displayed results removes their formulas. Rebuild them only when
     ' the test selector changes, so a temporarily cleared printout stays blank.
     If IsProtocolSheet(Sh) Then
-        If Not Application.Intersect(Target, Sh.Range("D7")).Is Nothing Then
+        If Not Application.Intersect(Target, Sh.Range("D7")) Is Nothing Then
             AdjustProtocol True
             Exit Sub
         End If
