@@ -193,9 +193,13 @@
         <label class="chk"><input type="checkbox" id="fHasRes"> только с результатами</label>
         <span class="grow"></span>
         <span class="count" id="count"></span>
+        <button type="button" class="btn tobase" id="toBase" title="Отправить всех участников протокола в «Базу сдавших» (дописываются ниже, ничего не перезаписывается)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+          <span class="tbl">В базу</span>
+        </button>
         <button class="btn xls" id="xlsBtn" title="Скачать в Excel то, что сейчас показано. Знаки пересчитываются при правке результатов">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-          Excel
+          Выгрузить
         </button>
         <button class="btn xls" id="importBtn" title="Загрузить выгрузку или бланк с другой площадки: участники и результаты перенесутся в главный протокол">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
@@ -1496,6 +1500,36 @@
   fSort.addEventListener('change', function () { setSort(fSort.value); });
   searchEl.addEventListener('input', render);
   refreshBtn.addEventListener('click', function () { load(true); });
+  // «В базу»: все участники протокола дописываются в Google Таблицу «База сдавших» (ниже прежних записей)
+  var toBaseBtn = document.getElementById('toBase');
+  function sendToBase(again) {
+    if (!again && !window.confirm('Отправить всех участников протокола «' + ($('evPill').textContent || '—') + '» в «Базу сдавших»?\n\n' +
+      'Строки допишутся ниже уже записанных, ничего не перезаписывается. Дата сдачи — из названия даты.')) return;
+    toBaseBtn.disabled = true;
+    toBaseBtn.classList.add('busy');
+    var askAgain = null;
+    requestJSON(scriptUrl, 240000, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'toBase', again: !!again })
+    })
+      .then(function (res) {
+        if (res && !res.ok && res.already) { askAgain = res; return; }
+        if (!res || !res.ok) { var error = new Error((res && res.error) || 'скрипт вернул ok: false'); error.definite = true; throw error; }
+        toast('В «' + (res.sheet || 'Базу сдавших') + '» записано ' + res.count + ' чел. с датой ' + res.date + '. Подсветка и аналитика обновлены.', true);
+      })
+      .catch(function (err) {
+        toast('Не отправлено в базу: ' + (err && err.message || String(err)) +
+          (err && err.definite ? '' : '. Если связь оборвалась, проверьте «Базу сдавших» перед повторной отправкой — иначе строки задвоятся.'));
+      })
+      .then(function () {
+        toBaseBtn.disabled = false;
+        toBaseBtn.classList.remove('busy');
+        if (askAgain && window.confirm('Протокол «' + askAgain.event + '» уже отправлен в «Базу сдавших» ' + askAgain.at +
+          ' (' + askAgain.count + ' чел.).\n\nОтправить ещё раз? В базе появятся повторные строки.')) sendToBase(true);
+      });
+  }
+  toBaseBtn.addEventListener('click', function () { sendToBase(false); });
   $('xlsBtn').addEventListener('click', exportExcel);
   $('blankBtn').addEventListener('click', downloadBlank);
   $('importBtn').addEventListener('click', function () { $('importFile').value = ''; $('importFile').click(); });
